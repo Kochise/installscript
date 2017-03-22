@@ -1,23 +1,46 @@
-///////////////////////////////
+// BROUGHT TO YOU BY A REAL CODER : KOCH DAVID from www.BAYO.com !!!
+
+// WORKING SAMPLE TO RETRIEVE THE LIST OF THE FILES READY TO BE INSTALLED, AND SCRUB THE MESS BEFORE A MINOR UPGRADE
+
+LIST   listInstallFeatureID, listInstallPathID, listInstallWildID;
+STRING svInstallWild;
+
+//////////////////////////////////////////////
+prototype FindInstallFiles(STRING, BYREF STRING, NUMBER);
+prototype ListInstallFiles(BYREF LIST, BYREF LIST);
+prototype WildCompare(STRING, STRING, BOOL);
+
+// PUT YOUR CODE THERE,
+// SUCH OnBegin AND ALL
+// OTHER FUNCTION FROM
+// NEEDED EVENTS...
+
+////////////////////////////////
 // --- OnResumeUIBefore() --- //
-///////////////////////////////
+////////////////////////////////
 function OnResumeUIBefore()
   STRING szTitle, szMsg;
   NUMBER nvResult;
 
   STRING svSrcOldFile, svSrcOldFileExt;
   NUMBER nvResultOldFile;
-
-  STRING svProgram, svCmdLine, svMessage;
-  LIST listKeyHklmSoftBayoItemsID;
 begin
   Disable(HOURGLASS);
   Disable(STATUSEX);
   Disable(INDVFILESTATUS);
 
+  svLogType = "UPDATE";
+
+  LOG_QUEUED_SEQ("OnResumeUIBefore");
+  LOG_PRODUCTINF("Type", svLogType);
+  LOG_SET_STRING("Execute", "START");
+
+  LOG_SET_STRING("Path:OldLocation", svOldLocation);
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR);
+
 Dlg_SdResumeWelcome:
-   szTitle = SdLoadString(ISWI_RESUMEUI_TITLE);
-   szMsg   = SdLoadString(ISWI_RESUMEUI_MSG);
+	szTitle = SdLoadString(ISWI_RESUMEUI_TITLE);
+	szMsg   = SdLoadString(ISWI_RESUMEUI_MSG);
 
   Disable(BACKBUTTON);
   nvResult = SdPatchWelcome(szTitle, szMsg);
@@ -27,28 +50,646 @@ Dlg_SdResumeWelcome:
     goto Dlg_SdResumeWelcome;
   endif;
 
-  // Animation
+  // Pendant la suite de l'installation qui va suivre, on affiche le sablier et la petite fenêtre d'attente
   SetStatusWindow(0, "");
   Enable(STATUSEX);
   Enable(HOURGLASS);
   StatusUpdate(ON, 100);
 
-  // Test if executable binary file
-  nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, RESET);
-  while(nvResultOldFile == 0)
-    ParsePath(svSrcOldFileExt, svSrcOldFile, EXTENSION_ONLY);
-    if(  (svSrcOldFileExt == "scr")
-      || (svSrcOldFileExt == "com")
-      || (svSrcOldFileExt == "exe")
-      || (svSrcOldFileExt == "dll")) then
-      LOG_ADD_STREAM("File:Delete", svSrcOldFile);
+  LOG_ENABLE(FALSE); // Stoppe le log MSI
 
-      // Make sure the file will be deleted
-      SetFileInfo(svSrcOldFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, "");
-      DeleteFile(svSrcOldFile); // Delete the unuseful file
+  // On s'assure que les fichiers binaires seront bien remplacés (forcément, si on les effaces, Windows Installer ne pourra que les remettres)
+  nvResultOldFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcOldFile, RESET);
+  while(nvResultOldFile == 0)
+//    LOG_ADD_STRING("File:Found", svSrcOldFile);
+
+    if(Is(FILE_EXISTS, svSrcOldFile) == TRUE) then
+      LOG_ADD_STRING("File:Delete", svSrcOldFile);
+
+      SetFileInfo(svSrcOldFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
+      DeleteFile(svSrcOldFile); // On efface le fichier inutile
     else
     endif;
-    nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CONTINUE);
+    nvResultOldFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcOldFile, CONTINUE);
   endwhile;
-  nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CANCEL);
+  nvResultOldFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcOldFile, CANCEL);
+
+  LOG_ENABLE(TRUE);
+
+  // Et c'est partiiiiii, on installe les fichiers et les clés de registre !
+  LOG_SET_STRING("Execute", "PASSED");
 end;
+
+// PUT YOUR CODE THERE,
+// SUCH OnResumeUIAfter AND ALL
+// OTHER FUNCTION FROM
+// NEEDED EVENTS...
+
+////////////////////////////////
+// --- FindInstallFiles() --- //
+////////////////////////////////
+function FindInstallFiles(svWild, svFile, nvMode)
+  STRING svWildTest, svTempo, svTempoFilename;
+  NUMBER nvResult, nvSize, nvLenght;
+begin
+  if(nvMode == RESET) then
+//    LOG_ADD_STREAM("FindInstallFiles:Find", "RESET");
+
+    ListDestroy(listInstallWildID);
+
+    listInstallWildID = ListCreate(STRINGLIST);
+    if(listInstallWildID == LIST_NULL) then
+    else
+      svInstallWild = svWild;
+      svWildTest    = svWild;
+
+      // Remove heading delimiters
+      StrSub(svTempo, svWildTest, 0, 1);
+      while(svTempo == "|")
+        nvSize = 1;
+        nvLenght = StrLength(svWildTest) - nvSize;
+        StrSub(svWildTest, svWildTest, nvSize, nvLenght);
+
+        StrSub(svTempo, svWildTest, 0, 1);
+      endwhile;
+
+      // Remove trailing delimiters
+      nvLenght = StrLength(svWildTest) - 1;
+      StrSub(svTempo, svWildTest, nvLenght, 1);
+      while(svTempo == "|")
+        StrSub(svWildTest, svWildTest, 0, nvLenght);
+
+        nvLenght = StrLength(svWildTest) - 1;
+        StrSub(svTempo, svWildTest, nvLenght, 1);
+      endwhile;
+
+//      LOG_ADD_STREAM("FindInstallFiles:Wild", svWildTest);
+
+      if(StrGetTokens(listInstallWildID, svWildTest, "|") < 0) then
+//        LOG_ADD_STREAM("FindInstallFiles:TokenWild", "ERROR");
+      else
+        ListDestroy(listInstallFeatureID);
+        ListDestroy(listInstallPathID);
+
+        listInstallFeatureID = ListCreate(STRINGLIST);
+        listInstallPathID    = ListCreate(STRINGLIST);
+        if((listInstallFeatureID == LIST_NULL) || (listInstallPathID == LIST_NULL)) then
+        else
+          if(ListInstallFiles(listInstallFeatureID, listInstallPathID) != ERROR_SUCCESS) then
+//            LOG_ADD_STREAM("FindInstallFiles:Find", "NOT LISTED");
+          else
+//            LOG_ADD_STREAM("FindInstallFiles:Find", "LISTED SUCCESS");
+
+            nvResult = ListGetFirstString(listInstallPathID, svTempo);
+            while(nvResult != END_OF_LIST)
+//              LOG_ADD_STREAM("FindInstallFiles:Find", "RESET : "+svTempo);
+
+              nvResult = ListGetFirstString(listInstallWildID, svWildTest);
+              while(nvResult != END_OF_LIST)
+                ParsePath(svTempoFilename, svTempo, FILENAME); // Limit compare
+                if(WildCompare(svTempoFilename, svWildTest, TRUE) == TRUE) then
+//                  LOG_ADD_STREAM("FindInstallFiles:Wild", "MATCH : "+svWildTest+" vs "+svTempo);
+
+                  svFile = svTempo;
+
+                  return 0;
+                else
+//                  LOG_ADD_STREAM("FindInstallFiles:Wild", "MISMATCH : "+svWildTest+" vs "+svTempo);
+                endif;
+
+                nvResult = ListGetNextString(listInstallWildID, svWildTest);
+              endwhile;
+
+              nvResult = ListGetNextString(listInstallPathID, svTempo);
+            endwhile;
+
+//            LOG_ADD_STREAM("FindInstallFiles:Find", "RESET - EOL");
+          endif;
+        endif;
+      endif;
+    endif;
+  else
+    if(nvMode == CONTINUE) then
+      if(svInstallWild == svWild) then
+        nvResult = ListGetNextString(listInstallPathID, svTempo);
+        while(nvResult != END_OF_LIST)
+//          LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE : "+svTempo);
+
+          nvResult = ListGetFirstString(listInstallWildID, svWildTest);
+          while(nvResult != END_OF_LIST)
+            ParsePath(svTempoFilename, svTempo, FILENAME); // Limit compare
+            if(WildCompare(svTempoFilename, svWildTest, TRUE) == TRUE) then
+//              LOG_ADD_STREAM("FindInstallFiles:Wild", "MATCH : "+svWildTest+" vs "+svTempo);
+
+              svFile = svTempo;
+
+              return 0;
+            else
+//              LOG_ADD_STREAM("FindInstallFiles:Wild", "MISMATCH : "+svWildTest+" vs "+svTempo);
+            endif;
+
+            nvResult = ListGetNextString(listInstallWildID, svWildTest);
+          endwhile;
+
+          nvResult = ListGetNextString(listInstallPathID, svTempo);
+        endwhile;
+
+//        LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - EOL");
+      else
+//        LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - WILD MISMATCH");
+      endif;
+    elseif(nvMode == CANCEL) then
+//      LOG_ADD_STREAM("FindInstallFiles:Find", "CANCEL");
+
+      ListDestroy(listInstallFeatureID);
+      ListDestroy(listInstallPathID);
+    else
+    endif;
+  endif;
+
+  svFile = "";
+
+  return 0-1;
+end;
+
+////////////////////////////////
+// --- ListInstallFiles() --- //
+////////////////////////////////
+function ListInstallFiles(listFeature, listPath)
+  HWND hvDataBase;
+
+  HWND hvViewFile;
+  HWND hvViewFileComponent;
+  HWND hvViewComponentDirectory;
+  HWND hvViewComponentFeature;
+  HWND hvViewDirectoryDirectory;
+  HWND hvViewDirectoryDefaultDir;
+  HWND hvViewFeatureFeature;
+
+  HWND hvSqlFile;
+  HWND hvSqlFileComponent;
+  HWND hvSqlComponentDirectory;
+  HWND hvSqlComponentFeature;
+  HWND hvSqlDirectoryDirectory;
+  HWND hvSqlDirectoryDefaultDir;
+  HWND hvSqlFeatureFeature;
+
+  HWND hvRecordFile;
+  HWND hvRecordFileComponent;
+  HWND hvRecordComponentDirectory;
+  HWND hvRecordComponentFeature;
+  HWND hvRecordDirectoryDirectory;
+  HWND hvRecordDirectoryDefaultDir;
+  HWND hvRecordFeatureFeature;
+
+  STRING svSqlRecord;
+
+  STRING svBufferFeature, svBufferPath;
+  STRING svTempoDirectory, svTempo;
+
+  NUMBER nvResult, nvSize, nvLenght, nvBufferSize, nvSuccess;
+begin
+  nvSuccess = ERROR_SUCCESS + 1; // ERROR
+
+  hvDataBase = MsiGetActiveDatabase(ISMSI_HANDLE); // Active MSI database
+  if(hvDataBase != 0) then
+    nvResult = MsiDatabaseOpenView(hvDataBase, "Select File, FileName from File ORDER BY FileName", hvViewFile);
+    if(nvResult == ERROR_SUCCESS) then
+      nvResult = MsiDatabaseOpenView(hvDataBase, "Select Component_ from File WHERE File = ?", hvViewFileComponent);
+      if(nvResult == ERROR_SUCCESS) then
+        nvResult = MsiDatabaseOpenView(hvDataBase, "Select Directory_ from Component WHERE Component = ?", hvViewComponentDirectory);
+        if(nvResult == ERROR_SUCCESS) then
+          nvResult = MsiDatabaseOpenView(hvDataBase, "Select Feature_ from FeatureComponents WHERE Component_ = ?", hvViewComponentFeature);
+          if(nvResult == ERROR_SUCCESS) then
+            nvResult = MsiDatabaseOpenView(hvDataBase, "Select Directory_Parent from Directory WHERE Directory = ?", hvViewDirectoryDirectory);
+            if(nvResult == ERROR_SUCCESS) then
+              nvResult = MsiDatabaseOpenView(hvDataBase, "Select DefaultDir from Directory WHERE Directory = ?", hvViewDirectoryDefaultDir);
+              if(nvResult == ERROR_SUCCESS) then
+                nvResult = MsiDatabaseOpenView(hvDataBase, "Select Feature_Parent from Feature WHERE Feature = ?", hvViewFeatureFeature);
+                if(nvResult == ERROR_SUCCESS) then
+
+                  hvSqlFile                = MsiCreateRecord(2); // FileName, File
+                  hvSqlFileComponent       = MsiCreateRecord(1); // Component_
+                  hvSqlComponentDirectory  = MsiCreateRecord(1); // Directory_
+                  hvSqlComponentFeature    = MsiCreateRecord(1); // Feature_
+                  hvSqlDirectoryDirectory  = MsiCreateRecord(1); // Directory_Parent
+                  hvSqlDirectoryDefaultDir = MsiCreateRecord(1); // DefaultDir
+                  hvSqlFeatureFeature      = MsiCreateRecord(1); // Feature_Parent
+
+                  nvResult = MsiRecordSetString(hvSqlFile, 1, ""); // File
+                  nvResult = MsiRecordSetString(hvSqlFile, 2, ""); // FileName
+
+                  // Fetch File
+                  nvResult = MsiViewExecute(hvViewFile, hvSqlFile);
+                  if(nvResult == ERROR_SUCCESS) then
+                    nvResult = MsiViewFetch(hvViewFile, hvRecordFile);
+                    while(nvResult == ERROR_SUCCESS)
+                      nvBufferSize = MAX_PATH;
+                      nvResult = MsiRecordGetString(hvRecordFile, 2, svSqlRecord, nvBufferSize); // FileName
+                      if(nvResult == ERROR_SUCCESS) then
+                        // Seek on long name
+                        nvSize = StrFind(svSqlRecord, "|");
+                        while(nvSize >= 0)
+                          nvSize = nvSize + 1;
+                          nvLenght = StrLength(svSqlRecord) - nvSize;
+                          StrSub(svSqlRecord, svSqlRecord, nvSize, nvLenght);
+
+                          nvSize = StrFind(svSqlRecord, "|");                      
+                        endwhile;
+
+//                        LOG_ADD_STREAM("ListInstallFiles:File:FileName", svSqlRecord);
+
+                        // Long file name
+                        svBufferFeature = svSqlRecord;
+                        svBufferPath    = svSqlRecord;
+
+                        // Get component from file
+                        nvBufferSize = MAX_PATH;
+                        nvResult = MsiRecordGetString(hvRecordFile, 1, svSqlRecord, nvBufferSize); // File
+                        if(nvResult == ERROR_SUCCESS) then
+//                          LOG_ADD_STREAM("ListInstallFiles:File:File", svSqlRecord);
+
+                          nvResult = MsiRecordSetString(hvSqlFileComponent, 1, svSqlRecord); // File
+                          if(nvResult == ERROR_SUCCESS) then
+                            nvResult = MsiViewExecute(hvViewFileComponent, hvSqlFileComponent);
+                            if(nvResult == ERROR_SUCCESS) then
+                              nvResult = MsiViewFetch(hvViewFileComponent, hvRecordFileComponent);
+                              if(nvResult == ERROR_SUCCESS) then
+                                nvBufferSize = MAX_PATH;
+                                nvResult = MsiRecordGetString(hvRecordFileComponent, 1, svSqlRecord, nvBufferSize); // Component_
+                                if(nvResult == ERROR_SUCCESS) then
+//                                  LOG_ADD_STREAM("ListInstallFiles:File:Component_", svSqlRecord);
+
+                                  svBufferFeature = svSqlRecord^svBufferFeature; // Component\FileName
+
+                                  nvResult = MsiRecordSetString(hvSqlComponentDirectory, 1, svSqlRecord); // Component
+                                  if(nvResult == ERROR_SUCCESS) then
+                                    nvResult = MsiRecordSetString(hvSqlComponentFeature, 1, svSqlRecord); // Component_
+                                    if(nvResult == ERROR_SUCCESS) then
+//                                      LOG_ADD_STREAM("ListInstallFiles:Seek", "FEATURE");
+
+                                      // Get feature from component
+                                      nvResult = MsiViewExecute(hvViewComponentFeature, hvSqlComponentFeature);
+                                      if(nvResult == ERROR_SUCCESS) then
+                                        nvResult = MsiViewFetch(hvViewComponentFeature, hvRecordComponentFeature);
+                                        if(nvResult == ERROR_SUCCESS) then
+                                          nvBufferSize = MAX_PATH;
+                                          nvResult = MsiRecordGetString(hvRecordComponentFeature, 1, svSqlRecord, nvBufferSize); // Feature_
+                                          if(nvResult == ERROR_SUCCESS) then
+//                                            LOG_ADD_STREAM("ListInstallFiles:FeatureComponents:Feature_", svSqlRecord);
+
+                                            svBufferFeature = svSqlRecord^svBufferFeature; // Feature\Component\FileName
+
+                                            // Loop feature
+                                            nvResult = MsiRecordSetString(hvSqlFeatureFeature, 1, svSqlRecord); // Feature
+                                            while(nvResult == ERROR_SUCCESS)
+                                              nvResult = MsiViewExecute(hvViewFeatureFeature, hvSqlFeatureFeature);
+                                              if(nvResult == ERROR_SUCCESS) then
+                                                nvResult = MsiViewFetch(hvViewFeatureFeature, hvRecordFeatureFeature);
+                                                if(nvResult == ERROR_SUCCESS) then
+                                                  nvBufferSize = MAX_PATH;
+                                                  nvResult = MsiRecordGetString(hvRecordFeatureFeature, 1, svSqlRecord, nvBufferSize); // Feature_Parent
+                                                  if(nvResult == ERROR_SUCCESS) then
+                                                    if(svSqlRecord != "") then
+//                                                      LOG_ADD_STREAM("ListInstallFiles:Feature:Feature_Parent", svSqlRecord);
+
+                                                      svBufferFeature = svSqlRecord^svBufferFeature; // Feature\...\Feature\Component\FileName
+
+                                                      nvResult = MsiRecordSetString(hvSqlFeatureFeature, 1, svSqlRecord); // Feature
+                                                    else
+                                                      nvResult = ERROR_SUCCESS - 1; // No Feature_Parent, stop loop
+                                                    endif;
+                                                  else
+                                                  endif;
+                                                else
+                                                endif;
+                                              else
+                                              endif;
+                                            endwhile;
+
+//                                            LOG_ADD_STREAM("ListInstallFiles:svBufferFeature", svBufferFeature);
+
+                                            if(svBufferFeature != "") then
+                                              if(ListAddString(listFeature, svBufferFeature, AFTER) < 0) then
+                                              else
+//                                                LOG_ADD_STREAM("ListInstallFiles:AddFeature", svBufferFeature);
+
+                                                nvSuccess = ERROR_SUCCESS; // SUCCESS
+                                              endif;
+                                            else
+                                            endif;
+                                          else
+                                          endif;
+                                        else
+                                        endif;
+                                      else
+                                      endif; // Feature from component
+
+//                                      LOG_ADD_STREAM("ListInstallFiles:Seek", "PATH");
+
+                                      // Get path from component
+                                      nvResult = MsiViewExecute(hvViewComponentDirectory, hvSqlComponentDirectory);
+                                      if(nvResult == ERROR_SUCCESS) then
+                                        nvResult = MsiViewFetch(hvViewComponentDirectory, hvRecordComponentDirectory);
+                                        if(nvResult == ERROR_SUCCESS) then
+                                          nvBufferSize = MAX_PATH;
+                                          nvResult = MsiRecordGetString(hvRecordComponentDirectory, 1, svSqlRecord, nvBufferSize); // Directory_
+                                          if(nvResult == ERROR_SUCCESS) then
+//                                            LOG_ADD_STREAM("ListInstallFiles:Component:Directory_", svSqlRecord);
+
+                                            // Loop path
+                                            nvResult = MsiRecordSetString(hvSqlDirectoryDefaultDir, 1, svSqlRecord); // Directory
+                                            while(nvResult == ERROR_SUCCESS)
+                                              nvResult = MsiRecordSetString(hvSqlDirectoryDirectory, 1, svSqlRecord); // Directory
+                                              if(nvResult == ERROR_SUCCESS) then
+                                                svTempoDirectory = svSqlRecord;
+
+                                                nvResult = MsiViewExecute(hvViewDirectoryDefaultDir, hvSqlDirectoryDefaultDir);
+                                                if(nvResult == ERROR_SUCCESS) then
+                                                  nvResult = MsiViewFetch(hvViewDirectoryDefaultDir, hvRecordDirectoryDefaultDir);
+                                                  if(nvResult == ERROR_SUCCESS) then
+                                                    nvBufferSize = MAX_PATH;
+                                                    nvResult = MsiRecordGetString(hvRecordDirectoryDefaultDir, 1, svSqlRecord, nvBufferSize); // DefaultDir
+                                                    if(nvResult == ERROR_SUCCESS) then
+//                                                      LOG_ADD_STREAM("ListInstallFiles:Directory:DefaultDir", svSqlRecord);
+
+                                                      StrSub(svTempo, svSqlRecord, 0, 2);
+                                                      if(svTempo != ".:") then
+                                                        // Get long path name
+                                                        nvSize = StrFind(svSqlRecord, "|");
+                                                        while(nvSize >= 0)
+                                                          nvSize = nvSize + 1;
+                                                          nvLenght = StrLength(svSqlRecord) - nvSize;
+                                                          StrSub(svSqlRecord, svSqlRecord, nvSize, nvLenght);
+
+                                                          nvSize = StrFind(svSqlRecord, "|");                      
+                                                        endwhile;
+
+                                                        if(svSqlRecord != ".") then // For INSTALLDIR entry
+                                                          svBufferPath = svSqlRecord^svBufferPath; // Directory\...\Directory\FileName
+                                                        else
+                                                        endif;
+
+                                                        // Get next directory
+                                                        nvResult = MsiViewExecute(hvViewDirectoryDirectory, hvSqlDirectoryDirectory);
+                                                        if(nvResult == ERROR_SUCCESS) then
+                                                          nvResult = MsiViewFetch(hvViewDirectoryDirectory, hvRecordDirectoryDirectory);
+                                                          if(nvResult == ERROR_SUCCESS) then
+                                                            nvBufferSize = MAX_PATH;
+                                                            nvResult = MsiRecordGetString(hvRecordDirectoryDirectory, 1, svSqlRecord, nvBufferSize); // Directory_Parent
+                                                            if(nvResult == ERROR_SUCCESS) then
+//                                                              LOG_ADD_STREAM("ListInstallFiles:Directory:Directory_Parent", svSqlRecord);
+
+                                                              // Seek next DefaultDir
+                                                              nvResult = MsiRecordSetString(hvSqlDirectoryDefaultDir, 1, svSqlRecord); // Directory
+                                                            else
+                                                            endif;
+                                                          else
+                                                          endif;
+                                                        else
+                                                        endif;
+                                                      else
+                                                        // System path
+                                                        if(svTempoDirectory == "AdminToolsFolder") then
+                                                          svBufferPath = AdminToolsFolder^svBufferPath;     // AdminToolsFolder
+                                                        elseif(svTempoDirectory == "AppDataFolder") then
+                                                          svBufferPath = AppDataFolder^svBufferPath;        // AppDataFolder
+                                                        elseif(svTempoDirectory == "CommonAppDataFolder") then
+                                                          svBufferPath = CommonAppDataFolder^svBufferPath;  // CommonAppDataFolder
+                                                        elseif(svTempoDirectory == "CommonFiles64Folder") then
+                                                          svBufferPath = CommonFiles64Folder^svBufferPath;  // CommonFiles64Folder
+                                                        elseif(svTempoDirectory == "CommonFilesFolder") then
+                                                          svBufferPath = CommonFilesFolder^svBufferPath;    // CommonFilesFolder
+                                                        elseif(svTempoDirectory == "DesktopFolder") then
+                                                          svBufferPath = DesktopFolder^svBufferPath;        // DesktopFolder
+                                                        elseif(svTempoDirectory == "FavoritesFolder") then
+                                                          svBufferPath = FavoritesFolder^svBufferPath;      // FavoritesFolder
+                                                        elseif(svTempoDirectory == "FontsFolder") then
+                                                          svBufferPath = FontsFolder^svBufferPath;          // FontsFolder
+                                                        elseif(svTempoDirectory == "LocalAppDataFolder") then
+                                                          svBufferPath = LocalAppDataFolder^svBufferPath;   // LocalAppDataFolder
+                                                        elseif(svTempoDirectory == "MyPicturesFolder") then
+                                                          svBufferPath = MyPicturesFolder^svBufferPath;     // MyPicturesFolder
+                                                        elseif(svTempoDirectory == "PersonalFolder") then
+                                                          svBufferPath = PersonalFolder^svBufferPath;       // PersonalFolder
+                                                        elseif(svTempoDirectory == "ProgramFiles64Folder") then
+                                                          svBufferPath = ProgramFiles64Folder^svBufferPath; // ProgramFiles64Folder
+                                                        elseif(svTempoDirectory == "ProgramFilesFolder") then
+                                                          svBufferPath = ProgramFilesFolder^svBufferPath;   // ProgramFilesFolder
+                                                        elseif(svTempoDirectory == "ProgramMenuFolder") then
+                                                          svBufferPath = ProgramMenuFolder^svBufferPath;    // ProgramMenuFolder
+                                                        elseif(svTempoDirectory == "SendToFolder") then
+                                                          svBufferPath = SendToFolder^svBufferPath;         // SendToFolder
+                                                        elseif(svTempoDirectory == "StartMenuFolder") then
+                                                          svBufferPath = StartMenuFolder^svBufferPath;      // StartMenuFolder
+                                                        elseif(svTempoDirectory == "StartupFolder") then
+                                                          svBufferPath = StartupFolder^svBufferPath;        // StartupFolder
+                                                        elseif(svTempoDirectory == "System16Folder") then
+                                                          svBufferPath = System16Folder^svBufferPath;       // System16Folder
+                                                        elseif(svTempoDirectory == "SystemFolder") then
+                                                          svBufferPath = SystemFolder^svBufferPath;         // SystemFolder
+                                                        elseif(svTempoDirectory == "System64Folder") then
+                                                          svBufferPath = System64Folder^svBufferPath;       // System64Folder
+                                                        elseif(svTempoDirectory == "TempFolder") then
+                                                          svBufferPath = TempFolder^svBufferPath;           // TempFolder
+                                                        elseif(svTempoDirectory == "TemplateFolder") then
+                                                          svBufferPath = TemplateFolder^svBufferPath;       // TemplateFolder
+                                                        elseif(svTempoDirectory == "WindowsFolder") then
+                                                          svBufferPath = WindowsFolder^svBufferPath;        // WindowsFolder
+                                                        elseif(svTempoDirectory == "WindowsVolume") then
+                                                          svBufferPath = WindowsVolume^svBufferPath;        // WindowsVolume
+                                                        else
+                                                        endif;
+
+                                                        nvResult = ERROR_SUCCESS - 1; // Stop loop
+                                                      endif;
+                                                    else
+                                                    endif;
+                                                  else
+                                                  endif;
+                                                else
+                                                endif;
+                                              else
+                                              endif;
+                                            endwhile;
+
+//                                            LOG_ADD_STREAM("ListInstallFiles:svBufferPath", svBufferPath);
+
+                                            if(svBufferPath != "") then
+                                              if(ListAddString(listPath, svBufferPath, AFTER) < 0) then
+                                              else
+//                                                LOG_ADD_STREAM("ListInstallFiles:AddFile", svBufferPath);
+
+                                                nvSuccess = ERROR_SUCCESS; // SUCCESS
+                                              endif;
+                                            else
+                                            endif;
+                                          else
+                                          endif;
+                                        else
+                                        endif;
+                                      else
+                                      endif; // Path from component
+
+//                                      LOG_ADD_STREAM("ListInstallFiles:Seek", "END LOOP");
+
+                                    else
+                                    endif;
+                                  else
+                                  endif;
+                                else
+                                endif;
+                              else
+                              endif;
+                            else
+                            endif;
+                          else
+                          endif;
+                        else
+                        endif; // Component from file
+
+                      else
+                      endif; // Get FileName
+
+                      nvResult = MsiViewFetch(hvViewFile, hvRecordFile);
+                    endwhile;
+                  else
+                  endif;
+
+                  MsiCloseHandle(hvRecordFile);
+                  MsiCloseHandle(hvRecordFileComponent);
+                  MsiCloseHandle(hvRecordComponentDirectory);
+                  MsiCloseHandle(hvRecordComponentFeature);
+                  MsiCloseHandle(hvRecordDirectoryDirectory);
+                  MsiCloseHandle(hvRecordFeatureFeature);
+
+                  MsiCloseHandle(hvSqlFile);
+                  MsiCloseHandle(hvSqlFileComponent);
+                  MsiCloseHandle(hvSqlComponentDirectory);
+                  MsiCloseHandle(hvSqlComponentFeature);
+                  MsiCloseHandle(hvSqlDirectoryDirectory);
+                  MsiCloseHandle(hvSqlFeatureFeature);
+
+                  MsiCloseHandle(hvViewFeatureFeature);
+                else
+                endif;
+
+                MsiCloseHandle(hvViewDirectoryDefaultDir);
+              else
+              endif;
+
+              MsiCloseHandle(hvViewDirectoryDirectory);
+            else
+            endif;
+
+            MsiCloseHandle(hvViewComponentFeature);
+          else
+          endif;
+
+          MsiCloseHandle(hvViewComponentDirectory);
+        else
+        endif;
+
+        MsiCloseHandle(hvViewFileComponent);
+      else
+      endif;
+
+      MsiCloseHandle(hvViewFile);
+    else
+    endif;
+
+    MsiCloseHandle(hvDataBase);
+  else
+  endif;
+
+  MsiCloseAllHandles(); // Just to be sure :P
+
+  return nvSuccess;
+end;
+
+///////////////////////////
+// --- WildCompare() --- //
+///////////////////////////
+function WildCompare(svSource, svWild, bvLower)
+  STRING svWildBuffer,  svSourceBuffer;
+  STRING svWildChar,    svSourceChar;
+
+  NUMBER nvWildPointer, nvSourcePointer;
+  NUMBER nvWildSaved,   nvSourceSaved;
+begin
+  nvWildPointer = 0;
+  nvSourcePointer = 0;
+
+  nvWildSaved = 0;
+  nvSourceSaved = 0;
+
+  svWildChar   = "";
+  svSourceChar = "";
+
+  if(bvLower == TRUE) then
+    StrToLower(svWildBuffer, svWild);
+    StrToLower(svSourceBuffer, svSource);
+  else
+    svWildBuffer = svWild;
+    svSourceBuffer = svSource;
+  endif;
+
+  StrSub(svWildChar, svWildBuffer, nvWildPointer, 1);
+  StrSub(svSourceChar, svSourceBuffer, nvSourcePointer, 1);
+  while((svSourceChar != "") && (svWildChar != "*"))
+    if((svSourceChar != svWildChar) && (svWildChar != "?")) then
+      return FALSE;
+    else
+      nvWildPointer   = nvWildPointer + 1;
+      nvSourcePointer = nvSourcePointer + 1;
+    endif;
+
+    StrSub(svWildChar, svWildBuffer, nvWildPointer, 1);
+    StrSub(svSourceChar, svSourceBuffer, nvSourcePointer, 1);
+  endwhile;
+
+  StrSub(svSourceChar, svSourceBuffer, nvSourcePointer, 1);
+  while(svSourceChar != "")
+    StrSub(svWildChar, svWildBuffer, nvWildPointer, 1);
+    if(svWildChar == "*") then
+      nvWildPointer = nvWildPointer + 1;
+
+      StrSub(svWildChar, svWildBuffer, nvWildPointer, 1);
+      if(svWildChar == "") then
+        return TRUE;
+      else
+        nvWildSaved = nvWildPointer;
+        nvSourceSaved = nvSourcePointer + 1;
+      endif;
+    else
+      StrSub(svWildChar, svWildBuffer, nvWildPointer, 1);
+      StrSub(svSourceChar, svSourceBuffer, nvSourcePointer, 1);
+
+      if((svSourceChar == svWildChar) || (svWildChar == "?")) then
+        nvWildPointer   = nvWildPointer + 1;
+        nvSourcePointer = nvSourcePointer + 1;
+      else
+        nvWildPointer   = nvWildSaved;
+        nvSourcePointer = nvSourceSaved;
+
+        nvSourceSaved = nvSourceSaved + 1;
+      endif;
+    endif;
+
+    StrSub(svSourceChar, svSourceBuffer, nvSourcePointer, 1);
+  endwhile;
+
+  StrSub(svWildChar, svWildBuffer, nvWildPointer, 1);
+  while(svWildChar == "*")
+    nvWildPointer = nvWildPointer + 1;
+  
+    StrSub(svWildChar, svWildBuffer, nvWildPointer, 1);
+  endwhile;
+
+  if(svWildChar == "") then
+    return TRUE;
+  else
+    return FALSE;
+  endif;
+end;
+
