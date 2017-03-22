@@ -2,11 +2,13 @@
 
 // WORKING SAMPLE TO RETRIEVE THE LIST OF THE FILES READY TO BE INSTALLED, AND SCRUB THE MESS BEFORE A MINOR UPGRADE
 
+#define REWIND RESET+CONTINUE+CANCEL // 3, for FindInstallFiles()
+
 LIST   listInstallFeatureID, listInstallPathID, listInstallWildID;
 STRING svInstallWild;
 
 //////////////////////////////////////////////
-prototype FindInstallFiles(STRING, BYREF STRING, NUMBER);
+prototype FindInstallFiles(STRING, BYREF STRING, BYREF STRING, NUMBER);
 prototype ListInstallFiles(BYREF LIST, BYREF LIST);
 prototype WildCompare(STRING, STRING, BOOL);
 
@@ -22,8 +24,8 @@ function OnResumeUIBefore()
   STRING szTitle, szMsg;
   NUMBER nvResult;
 
-  STRING svSrcOldFile, svSrcOldFileExt;
-  NUMBER nvResultOldFile;
+  STRING svSrcFile, svSrcFeature;
+  NUMBER nvResultFile;
 begin
   Disable(HOURGLASS);
   Disable(STATUSEX);
@@ -35,8 +37,8 @@ begin
   LOG_PRODUCTINF("Type", svLogType);
   LOG_SET_STRING("Execute", "START");
 
-  LOG_SET_STRING("Path:OldLocation", svOldLocation);
-  LOG_SET_STRING("Path:InstallDir", INSTALLDIR);
+  LOG_SET_STRING("Path:OldLocation", svOldLocation^"\\");
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
 
 Dlg_SdResumeWelcome:
 	szTitle = SdLoadString(ISWI_RESUMEUI_TITLE);
@@ -59,20 +61,20 @@ Dlg_SdResumeWelcome:
   LOG_ENABLE(FALSE); // Stoppe le log MSI
 
   // On s'assure que les fichiers binaires seront bien remplacés (forcément, si on les effaces, Windows Installer ne pourra que les remettres)
-  nvResultOldFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcOldFile, RESET);
-  while(nvResultOldFile == 0)
-//    LOG_ADD_STRING("File:Found", svSrcOldFile);
+  nvResultFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcFile, svSrcFeature, RESET);
+  while(nvResultFile == 0)
+    if(Is(FILE_EXISTS, svSrcFile) == TRUE) then
+      LOG_ADD_STRING("File:Delete", svSrcFile);
 
-    if(Is(FILE_EXISTS, svSrcOldFile) == TRUE) then
-      LOG_ADD_STRING("File:Delete", svSrcOldFile);
-
-      SetFileInfo(svSrcOldFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
-      DeleteFile(svSrcOldFile); // On efface le fichier inutile
+      SetFileInfo(svSrcFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
+      DeleteFile(svSrcFile); // On efface le fichier inutile
     else
+      LOG_ADD_STRING("File:Found", svSrcFile);
     endif;
-    nvResultOldFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcOldFile, CONTINUE);
+
+    nvResultFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcFile, svSrcFeature, CONTINUE);
   endwhile;
-  nvResultOldFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcOldFile, CANCEL);
+  nvResultFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcFile, svSrcFeature, CANCEL);
 
   LOG_ENABLE(TRUE);
 
@@ -88,8 +90,8 @@ end;
 ////////////////////////////////
 // --- FindInstallFiles() --- //
 ////////////////////////////////
-function FindInstallFiles(svWild, svFile, nvMode)
-  STRING svWildTest, svTempo, svTempoFilename;
+function FindInstallFiles(svWild, svFile, svFeature, nvMode)
+  STRING svWildTest, svTempo, svTempoFile, svTempoFeature;
   NUMBER nvResult, nvSize, nvLenght;
 begin
   if(nvMode == RESET) then
@@ -133,6 +135,7 @@ begin
 
         listInstallFeatureID = ListCreate(STRINGLIST);
         listInstallPathID    = ListCreate(STRINGLIST);
+
         if((listInstallFeatureID == LIST_NULL) || (listInstallPathID == LIST_NULL)) then
         else
           if(ListInstallFiles(listInstallFeatureID, listInstallPathID) != ERROR_SUCCESS) then
@@ -140,17 +143,20 @@ begin
           else
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "LISTED SUCCESS");
 
-            nvResult = ListGetFirstString(listInstallPathID, svTempo);
+            nvResult = ListGetFirstString(listInstallPathID, svTempoFile);
+                       ListGetFirstString(listInstallFeatureID, svTempoFeature);
             while(nvResult != END_OF_LIST)
 //              LOG_ADD_STREAM("FindInstallFiles:Find", "RESET : "+svTempo);
 
+              ParsePath(svTempo, svTempoFile, FILENAME); // Limit compare
+
               nvResult = ListGetFirstString(listInstallWildID, svWildTest);
               while(nvResult != END_OF_LIST)
-                ParsePath(svTempoFilename, svTempo, FILENAME); // Limit compare
-                if(WildCompare(svTempoFilename, svWildTest, TRUE) == TRUE) then
+                if(WildCompare(svTempo, svWildTest, TRUE) == TRUE) then
 //                  LOG_ADD_STREAM("FindInstallFiles:Wild", "MATCH : "+svWildTest+" vs "+svTempo);
 
-                  svFile = svTempo;
+                  svFile    = svTempoFile;
+                  svFeature = svTempoFeature;
 
                   return 0;
                 else
@@ -160,7 +166,8 @@ begin
                 nvResult = ListGetNextString(listInstallWildID, svWildTest);
               endwhile;
 
-              nvResult = ListGetNextString(listInstallPathID, svTempo);
+              nvResult = ListGetNextString(listInstallPathID, svTempoFile);
+                         ListGetNextString(listInstallFeatureID, svTempoFeature);
             endwhile;
 
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "RESET - EOL");
@@ -168,46 +175,82 @@ begin
         endif;
       endif;
     endif;
-  else
-    if(nvMode == CONTINUE) then
-      if(svInstallWild == svWild) then
-        nvResult = ListGetNextString(listInstallPathID, svTempo);
+  elseif(nvMode == CONTINUE) then
+    if(svInstallWild == svWild) then
+      nvResult = ListGetNextString(listInstallPathID, svTempoFile);
+                 ListGetNextString(listInstallFeatureID, svTempoFeature);
+      while(nvResult != END_OF_LIST)
+//        LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE : "+svTempo);
+
+        ParsePath(svTempo, svTempoFile, FILENAME); // Limit compare
+
+        nvResult = ListGetFirstString(listInstallWildID, svWildTest);
         while(nvResult != END_OF_LIST)
-//          LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE : "+svTempo);
+          if(WildCompare(svTempo, svWildTest, TRUE) == TRUE) then
+//            LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - MATCH : "+svWildTest+" vs "+svTempo);
 
-          nvResult = ListGetFirstString(listInstallWildID, svWildTest);
-          while(nvResult != END_OF_LIST)
-            ParsePath(svTempoFilename, svTempo, FILENAME); // Limit compare
-            if(WildCompare(svTempoFilename, svWildTest, TRUE) == TRUE) then
-//              LOG_ADD_STREAM("FindInstallFiles:Wild", "MATCH : "+svWildTest+" vs "+svTempo);
+            svFile    = svTempoFile;
+            svFeature = svTempoFeature;
 
-              svFile = svTempo;
+            return 0;
+          else
+//            LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - MISMATCH : "+svWildTest+" vs "+svTempo);
+          endif;
 
-              return 0;
-            else
-//              LOG_ADD_STREAM("FindInstallFiles:Wild", "MISMATCH : "+svWildTest+" vs "+svTempo);
-            endif;
-
-            nvResult = ListGetNextString(listInstallWildID, svWildTest);
-          endwhile;
-
-          nvResult = ListGetNextString(listInstallPathID, svTempo);
+          nvResult = ListGetNextString(listInstallWildID, svWildTest);
         endwhile;
 
-//        LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - EOL");
-      else
-//        LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - WILD MISMATCH");
-      endif;
-    elseif(nvMode == CANCEL) then
-//      LOG_ADD_STREAM("FindInstallFiles:Find", "CANCEL");
+        nvResult = ListGetNextString(listInstallPathID, svTempoFile);
+                   ListGetNextString(listInstallFeatureID, svTempoFeature);
+      endwhile;
 
-      ListDestroy(listInstallFeatureID);
-      ListDestroy(listInstallPathID);
+//      LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - EOL");
     else
+//      LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - WILD MISMATCH");
     endif;
+  elseif(nvMode == REWIND) then
+    if(svInstallWild == svWild) then
+      nvResult = ListGetFirstString(listInstallPathID, svTempoFile);
+                 ListGetFirstString(listInstallFeatureID, svTempoFeature);
+      while(nvResult != END_OF_LIST)
+//        LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND : "+svTempo);
+
+        ParsePath(svTempo, svTempoFile, FILENAME); // Limit compare
+
+        nvResult = ListGetFirstString(listInstallWildID, svWildTest);
+        while(nvResult != END_OF_LIST)
+          if(WildCompare(svTempo, svWildTest, TRUE) == TRUE) then
+//            LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND - MATCH : "+svWildTest+" vs "+svTempo);
+
+            svFile    = svTempoFile;
+            svFeature = svTempoFeature;
+
+            return 0;
+          else
+//            LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND - MISMATCH : "+svWildTest+" vs "+svTempo);
+          endif;
+
+          nvResult = ListGetNextString(listInstallWildID, svWildTest);
+        endwhile;
+
+        nvResult = ListGetNextString(listInstallPathID, svTempoFile);
+                   ListGetNextString(listInstallFeatureID, svTempoFeature);
+      endwhile;
+
+//      LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND - EOL");
+    else
+//      LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND - WILD MISMATCH");
+    endif;
+  elseif(nvMode == CANCEL) then
+//    LOG_ADD_STREAM("FindInstallFiles:Find", "CANCEL");
+
+    ListDestroy(listInstallFeatureID);
+    ListDestroy(listInstallPathID);
+  else
   endif;
 
-  svFile = "";
+  svFile    = "";
+  svFeature = "";
 
   return 0-1;
 end;
