@@ -1,44 +1,1335 @@
-// BROUGHT TO YOU BY A REAL CODER : KOCH DAVID from www.BAYO.com !!!
+// TYPE    DU SCRIPT : SOCOOL
+// AUTEUR  DU SCRIPT : KOCH David
+// VERSION DU SCRIPT : 2005/03/16 Version 51 (REMPLACER g_nvVerScript DANS OnBegin() !!!)
 
-// WORKING SAMPLE TO RETRIEVE THE LIST OF THE FILES READY TO BE INSTALLED, AND SCRUB THE MESS BEFORE A MINOR UPGRADE
+// CVS    DATE       - I - SUP/ADD/MOD   COMMENTAIRE
+// 1.1  - 2004/05/18 - 3 -
+// 1.2  - 2004/06/16 - 3 -
+// 1.3  - 2004/06/24 - 3 -
+// 1.4  - 2004/07/09 - 2 -
+// 1.5  - 2004/07/15 - 2 -
+// 1.6  - 2004/09/07 - 2 -
+// 1.7  - 2004/10/11 - 2 -
+// 1.8  - 2004/10/21 - 2 -
+// 1.9  - 2004/10/27 - 2 -
+// 1.10 - 2004/11/16 - 2 - 
+// 1.11 - 2004/11/19 - 2 - 
+// 1.12 - 2004/11/22 - 2 - 
+// 1.13 - 2004/11/25 - 2 - 
 
-#define REWIND RESET+CONTINUE+CANCEL // 3, for FindInstallFiles()
+#include "ifx.h"
+//#include "iswi.h"
+//#include "isrt.h"
 
-LIST   listInstallFeatureID, listInstallPathID, listInstallWildID;
-STRING svInstallWild;
+#define REWIND RESET+CONTINUE+CANCEL // 3, pour FindInstallFiles()
+
+STRING g_svSetupExeDir, g_svSetupExeDisk, g_svProductName;
+STRING g_svOldLocation, g_svNewLocation;
+
+LIST   g_listInstallFeatureID, g_listInstallPathID, g_listInstallWildID;
+STRING g_svInstallWild;
+
+STRING g_svLogPath, g_svLogFile, g_svLogDateTime, g_svLogStep, g_svLogType;
+BOOL   g_bvLogEnable;
+
+LIST   g_listProdFournFilesID;
+NUMBER g_nvInstall, g_nvFilesInUseLoop;
+BOOL   g_bvPlugIns, g_bvReseau;
+
+NUMBER g_nvVerScript;
+STRING g_svVerInstallShield;
+
+STRING g_svCommandLine;
 
 //////////////////////////////////////////////
+
+prototype UninstallAllSoCoolFiles();
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+prototype GetKeysSubLevelsIncluded(BYREF LIST, STRING);
+
+prototype ReplaceValuesInKeys(BYREF LIST, STRING, STRING);
+prototype ReplaceString(BYREF STRING, STRING, STRING);
+
+prototype KeyTreeNumber(STRING);
+prototype KeyTreeRead(BYREF LIST, STRING);
+prototype KeyTreeWrite(BYREF LIST);
+prototype KeyTreeUnprotect(STRING);
+
 prototype FindInstallFiles(STRING, BYREF STRING, BYREF STRING, NUMBER);
 prototype ListInstallFiles(BYREF LIST, BYREF LIST);
 prototype WildCompare(STRING, STRING, BOOL);
 
-// PUT YOUR CODE THERE,
-// SUCH OnBegin AND ALL
-// OTHER FUNCTION FROM
-// NEEDED EVENTS...
+prototype LOG_INIT();
+prototype LOG_FLUSH();
+prototype LOG_ENABLE(BOOL);
+prototype LOG_RESET();
+prototype LOG_PKG_RESULT(STRING);
+prototype LOG_QUEUED_SEQ(STRING);
+prototype LOG_PRODUCTINF(STRING, STRING);
+prototype LOG_ADD_STREAM(STRING, STRING);
+prototype LOG_ADD_STRING(STRING, STRING);
+prototype LOG_SET_STRING(STRING, STRING);
+prototype LOG_SET_NUMBER(STRING, NUMBER);
 
-////////////////////////////////
-// --- OnResumeUIBefore() --- //
-////////////////////////////////
-function OnResumeUIBefore()
+//////////////////////////////////////////////
+
+//   INSTALLATION     DESINSTALLATION      RESUME/UPGRADE          PATCH
+//       |                   |                   |                   |
+//       '-------------------+-------------------'                   |
+//                           |                                       |
+//                        OnBegin()                                  |
+//                           |                                       |
+//       ,-------------------+-------------------,                   |
+//       |                   |                   |                   |
+// OnFirstUIBefore()  OnMaintUIBefore()  OnResumeUIBefore()  OnPatchUIBefore()
+//       |                   |                   |                   |
+//   {ECRITURE}         {EFFACEMENT}       {MISE A JOUR}          {PATCH}
+//     {DES}               {DES}               {DES}               {DES}
+//   {FICHIERS}          {FICHIERS}          {FICHIERS}          {FICHIERS}
+//       |                   |                   |                   |
+//  OnFirstUIAfter()  OnMaintUIAfter()   OnResumeUIAfter()    OnPatchUIAfter()
+//       |                   |                   |                   |
+//       '-------------------+-------------------'                   |
+//                           |                                       |
+//                         OnEnd()         
+
+///////////////////////
+// --- OnBegin() --- //
+///////////////////////
+function OnBegin()
+  NUMBER nvSize, nvType, nvResult;
+  STRING svAdminUser, svResult, svTempo;
+begin
+  g_nvVerScript = 52; // Version 52
+
+  svAdminUser = "";
+  g_svCommandLine = "";
+
+  SHELL_OBJECT_FOLDER   = @PRODUCT_NAME+"_"+PRODUCT_GUID;
+  UNINSTALL_DISPLAYNAME = @PRODUCT_NAME+" "+@NOT_SOCOOLVERSION;
+  UNINSTALLKEY          = @PRODUCT_NAME+"_"+PRODUCT_GUID;
+
+  LOG_INIT();
+
+  LOG_QUEUED_SEQ("OnBegin");
+  LOG_SET_STRING("Execute", "START");
+
+  // On supprime les espaces dans le nom du programme (genre "SoCool 3" devient "SoCool")
+  nvSize = StrFind(@PRODUCT_NAME, " ");
+  if(nvSize < 0) then
+    g_svProductName = @PRODUCT_NAME;
+  else
+    StrSub(g_svProductName, @PRODUCT_NAME, 0, nvSize); 
+  endif;
+  
+  // Change la bannière haute
+  // Pour changer la bannière gauche, changer le chemin d'accès et le fichier dans 'Additional Tools/Direct Editor/Binary/NewBinary1' avec '<Splash>\BannerTopSoCool.bmp'
+  DialogSetInfo(DLG_INFO_ALTIMAGE, SUPPORTDIR^"BannerTop"+g_svProductName+".bmp", TRUE);
+
+  // On récupère ICI, au début de 'OnBegin()', là où ça fonctionne, le chemin du programme 'Setup.exe', pas le chemin temporaire d'execution en cas de release 'Network'
+  nvSize = MAX_PATH + 1;
+  MsiGetProperty(ISMSI_HANDLE, "SETUPEXEDIR", g_svSetupExeDir, nvSize);
+  g_svSetupExeDir = g_svSetupExeDir^"\\";
+  ParsePath(g_svSetupExeDisk, g_svSetupExeDir, DISK);
+
+  LOG_SET_STRING("Setup:ExeDisk", g_svSetupExeDisk);
+  LOG_SET_STRING("Setup:ExeDir",  g_svSetupExeDir);
+  LOG_SET_STRING("Setup:CommandLine", CMDLINE);
+
+  g_svVerInstallShield = CommonFilesFolder^"InstallShield\\Driver\\8\\Intel 32\\IDriver.exe"; // ATTENTION A L'EVOLUTION D'INSTALLSHIELD !
+
+  LOG_SET_STRING("Setup:IDriver", g_svVerInstallShield);
+
+  g_nvFilesInUseLoop = 0;
+
+  // Vérifie si l'on est en mode Administrateur
+  nvSize = MAX_PATH + 1;
+  MsiGetProperty(ISMSI_HANDLE, "AdminUser", svAdminUser, nvSize);
+  if(svAdminUser == "") then
+    LOG_SET_STRING("Execute", "FAILED - USER MODE");
+    LOG_QUEUED_SEQ("ABORT");
+    LOG_PKG_RESULT("FAILED - USER MODE");
+
+    MessageBox(@NOT_ISTXT_ADMIN_MODE_ONLY, WARNING); // "Execution possible seulement en mode Administrateur !"
+    abort; // TOUT CON MAIS DIABLEMENT EFFICACE !
+  else
+  endif;
+
+  // On essaye de récupérer le chemin d'installation de SOCOOL, si celui-ci à déjà été installé précédement
+  RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+
+  nvResult = RegDBGetKeyValueEx("SOFTWARE\\Not"^@PRODUCT_NAME, "Dossier", nvType, svResult, nvSize);
+  if((nvResult >= 0) && (svResult != "")) then
+    // Si la clé existe alors on récupère sa valeur dans INSTALLDIR et on propose de réinstaller SOCOOL au même endroit
+    INSTALLDIR      = svResult^"\\";
+    g_svOldLocation = INSTALLDIR; // Ancien emplacement
+  else
+    // Sinon, le chemin par défaut, qui est [Lecteur:]\\Program Files\\Not\\{SOCOOL}
+    INSTALLDIR      = ProgramFilesFolder^"\\Not"^@NOT_SOCOOL^"\\"; // Chemin commun pour certains produit !
+    g_svOldLocation = ""; // Pas de nouvel emplacement, chemin d'installation par défaut
+  endif;
+
+  g_svNewLocation = INSTALLDIR^"\\";
+
+  LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+///////////////////////////////
+// --- OnFirstUIBefore() --- //
+///////////////////////////////
+function OnFirstUIBefore()
+  STRING szTitle, szMsg;
+  NUMBER nvResult, nvSetupType, nvSize, nvType;
+
+  STRING svFeatParent, svFeatChild;
+  LIST   listFeatParentID, listFeatChildID;
+  NUMBER nvResultFeat;
+
+  STRING svResult, svProgram, svCmdLine, svMessage;
+begin  
+  Disable(HOURGLASS);
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+  g_svLogType = "INSTALLATION";
+
+  LOG_QUEUED_SEQ("OnFirstUIBefore");
+  LOG_PRODUCTINF("Type", g_svLogType);
+  LOG_SET_STRING("Execute", "START");
+
+  g_nvInstall = NEXT;
+
+  // Si il n'y a pas d'ancienne installation de détectée, on vérifie quand même si ce n'est pas à cause d'une ancienne version qui n'aurait pas laissée de trace
+  if(g_svOldLocation == "") then
+    // On demande si à tout hasard y'avais pas déjà quelque chose d'installé
+    if(@AUTORUN == "TRUE") then
+      nvResult = NO;
+    else
+      nvResult = AskYesNo(@PRODUCT_NAME+@NOT_ISTXT_ANC_INSTALL, NO);
+    endif;
+
+    if(nvResult == YES) then
+      // Sinon, l'ancien chemin par défaut est en principe [Lecteur:]\\Program Files\\{SOCOOL}
+      g_svOldLocation = ProgramFilesFolder^@NOT_SOCOOL^"\\";
+      
+      Disable(BACKBUTTON);
+      nvResult = SdAskDestPath(szTitle, @NOT_ISTXT_ANC_INSTALL_LOC+@PRODUCT_NAME+".", g_svOldLocation, 0);
+      Enable(BACKBUTTON);
+
+      if(g_svOldLocation != "") then
+        g_svOldLocation = g_svOldLocation^"\\";
+      else
+      endif;
+
+      LOG_SET_STRING("Path:PreviousInstall", "OLD INSTALL PATH SELECTED (check Path:OldLocation)");
+      LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+      // Pas besoin de vérifier l'existence du répertoire, ce sera fait au début de 'OnFirstUIAfter()'
+    else
+      LOG_SET_STRING("Path:PreviousInstall", "NOT YET INSTALLED");
+    endif;
+  else
+    LOG_SET_STRING("Path:PreviousInstall", "PREVIOUSLY INSTALLED (check Path:OldLocation)");
+    LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+  endif;
+
+  LOG_SET_STRING("Path:NewLocation", g_svNewLocation^"\\");
+
+  // On passe le rappel du Splash Screen, que l'on vient DEJA d'apercevoir
+
+  if(@AUTORUN == "TRUE") then
+    LOG_SET_STRING("Setup:Type", "AUTORUN");
+    goto Dlg_SdExtendedMemoryTest;
+  else
+    goto Dlg_SdSetupType;
+  endif;
+
+Dlg_SdWelcome:
+  Disable(HOURGLASS);
+
+  // Ouverture de la boîte de dialogue initiale
+  szTitle = "";
+  szMsg   = "";
+  NumToStr(svResult, SELECTED_LANGUAGE);
+  Disable(BACKBUTTON);
+  nvResult = SdBitmap(szTitle, szMsg, SUPPORTDIR^"Splash"+g_svProductName+svResult+".bmp");
+  Enable(BACKBUTTON);
+
+Dlg_SdSetupType: 
+  Disable(HOURGLASS);
+
+  szTitle = "";
+  szMsg   = "";
+  nvSetupType = SdSetupType(szTitle, szMsg, INSTALLDIR, 0);
+
+  nvSize = 0;
+  // Vérification de l'espace libre sur le disque
+  FeatureCompareSizeRequired(MEDIA, INSTALLDIR, nvSize);
+  // Si l'espace libre est insuffisant
+  if(nvSize != 0) then
+    MessageBox(szSdStr_NotEnoughSpace, WARNING);
+    goto Dlg_SdSetupType;
+  endif;
+
+  if(nvSetupType == TYPICAL) then
+    g_svCommandLine = " /z\"-inst:TYPICAL\" /inst=\"TYPICAL\" /SILENT"; // Le "/SILENT" est pour InnoSetup
+    LOG_SET_STRING("Setup:Type", "TYPICAL");
+    goto Dlg_SdExtendedMemoryTest;
+  elseif(nvSetupType == COMPACT) then
+    g_svCommandLine = " /z\"-inst:COMPACT\"  /inst=\"COMPACT\" /SILENT"; // Le "/SILENT" est pour InnoSetup
+    LOG_SET_STRING("Setup:Type", "COMPACT");
+    goto Dlg_SdExtendedMemoryTest;
+  elseif(nvSetupType == CUSTOM) then
+    g_svCommandLine = " /z\"-inst:CUSTOM\" /inst=\"CUSTOM\"";
+    LOG_SET_STRING("Setup:Type", "CUSTOM");
+    goto Dlg_SdFeatureTree;
+  elseif(nvSetupType == BACK) then
+    goto Dlg_SdWelcome;
+  else
+  endif;
+
+Dlg_SdFeatureTree: 
+  Disable(HOURGLASS);
+
+  szTitle  = "";
+  szMsg    = "";
+  nvResult = SdFeatureTree(szTitle, szMsg, INSTALLDIR, "", 2);
+
+  nvSize = 0;
+  // Vérification de l'espace libre sur le disque
+  FeatureCompareSizeRequired(MEDIA, INSTALLDIR, nvSize);
+  // Si l'espace libre est insuffisant
+  if(nvSize != 0) then
+    MessageBox(szSdStr_NotEnoughSpace, WARNING);
+    goto Dlg_SdSetupType;
+  else
+  endif;
+
+  if(nvResult == BACK) then
+    goto Dlg_SdSetupType;
+  elseif(nvResult == NEXT) then
+  else
+  endif; // (nvResult == BACK)
+
+Dlg_SdExtendedMemoryTest:
+  Disable(HOURGLASS);
+
+  // Vérification de de la mémoire libre    
+  szTitle = "";
+  szMsg   = "";
+  GetSystemInfo(EXTENDEDMEMORY, nvResult, svResult);
+  // Si inférieure à 223 Mo (même pour les produits comme SoCool ou SoCoolNav ! De toute façon, avec Windows, il est conseillé d'avoir au moins 256 Mo de mémoire, nah !)
+  nvResult = nvResult / 1024;
+  LOG_SET_NUMBER("Memory:Available", nvResult);
+  if((@AUTORUN != "TRUE") && (nvResult < 223)) then
+    SprintfBox(WARNING, "", @NOT_ISTXT_VOTR_SYS+"%d"+@NOT_ISTXT_MEM_ETEND, nvResult);
+  else
+  endif; // (nvResult < 223)
+
+  // Pour l'instant (050223), je bloque cette partie, puisque le client n'a cas passer en installation CUSTOM pour modifier les paramètres
+  if(nvSetupType == BACK) then
+    // Les listes de Features autres que 'Donnees' et 'Langage' (si leur sous-features ne sont pas déjà complètement sélectionnées)
+    listFeatParentID = ListCreate(STRINGLIST);
+
+    if(listFeatParentID == LIST_NULL) then
+      Disable(HOURGLASS);
+      SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+      Enable(HOURGLASS);
+    else
+      // On récupère la liste des Features 'root' ('Donnees', 'Langage', 'OutreMer', ...)
+      nvResultFeat = FeatureListItems(MEDIA, "", listFeatParentID);
+      if(nvResultFeat < 0) then
+      else
+        // Pour chaque Feature 'root', on va lister les enfants
+        nvResultFeat = ListGetFirstString(listFeatParentID, svFeatParent);
+        while(nvResultFeat != END_OF_LIST)
+          if((svFeatParent != "Donnees") && (svFeatParent != "Langage") && (svFeatParent != "Upgrade")) then
+            LOG_ADD_STRING("Feat:Parent", svFeatParent);
+          
+            // Si ce n'est pas un Feature 'root' classique, on vérifie son contenu
+
+            listFeatChildID = ListCreate(STRINGLIST);
+
+            if(listFeatChildID == LIST_NULL) then
+              Disable(HOURGLASS);
+              SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+              Enable(HOURGLASS);
+            else
+              nvResultFeat = FeatureListItems(MEDIA, svFeatParent, listFeatChildID); // Attention, le Feature parent est inclus !
+              if(nvResultFeat < 0) then
+              else
+                // On a la liste des Enfants, on vérifie s'il sont tous sélectionnés
+                nvResult = TRUE;
+
+                nvResultFeat = ListGetFirstString(listFeatChildID, svFeatChild);
+                while((nvResultFeat != END_OF_LIST) && (nvResult == TRUE))
+                  // On cherche le premier Enfant non sélectionné
+                  nvResult = FeatureIsItemSelected(MEDIA, svFeatChild);
+                  if(nvResult > 0) then
+                    svFeatChild = "[X] "+svFeatChild;
+                  else
+                    svFeatChild = "[ ] "+svFeatChild;
+                  endif;
+
+                  LOG_ADD_STRING("Feat:Child", svFeatChild);
+
+                  nvResultFeat = ListGetNextString(listFeatChildID, svFeatChild);
+                endwhile; // Pour chaque Feature 'enfant'
+
+// NE PAS OUBLIER DE MODIFIER CETTE PARTIE DE CODE EN FONCTION ...
+                if(nvResult != TRUE) then
+                  // Si il y'en a un de pas sélectionné, on affiche l'interface de 'ouf'...
+                  if(svFeatParent == "OutreMer") then
+                    szTitle = @NOT_FEAT_OUTREMER_TITRE;
+                    szMsg   = @NOT_FEAT_OUTREMER_MSG;
+                  elseif(svFeatParent == "Services") then
+                    szTitle = @NOT_FEAT_SERVICES_TITRE;
+                    szMsg   = @NOT_FEAT_SERVICES_MSG;
+                  elseif(svFeatParent == "AutreFeature") then
+                    // Ajouter ici les autres Features à gerer à fur-et-à-mesure de leur création. Attention à la transversalité (compatibilité du script/features entre les produits SoCool)                                                                                                                                                                  J'ai bien écrit transversalité, PAS transexualité ! Non mais...
+                    szTitle = "Autre Feature";
+                    szMsg   = "C'est juste un exemple, bien sûr !";
+                  else
+                    szTitle = "";
+                    szMsg   = "";
+                  endif;
+// ...DES FEATURES PRESENTENT DANS LES PRODUITS SOCOOL
+
+                  if(szTitle != "") then
+                    // S'il y a un titre, c'est que c'est un Feature à traiter, donc, en avant l'interface !
+                    Disable(HOURGLASS);
+                    nvResult = SdAskOptionsList(szTitle, szMsg+@PRODUCT_NAME+".", svFeatParent, NONEXCLUSIVE);
+                    Enable(HOURGLASS);
+
+                    if(nvResult == BACK) then
+                      goto Dlg_SdSetupType;
+                    elseif(nvResult == NEXT) then
+                    else
+                    endif; // (nvResult == BACK)
+                  else
+                  endif; // (szTitle != "")
+                else
+                endif; // (nvResult != TRUE)
+              endif; // (nvResultFeat < 0)
+
+              ListDestroy(listFeatChildID);  
+            endif; // (listFeatChildID == LIST_NULL)
+          else
+          endif; // ((svFeatParent != "Donnees") && (svFeatParent != "Langage"))
+
+          nvResultFeat = ListGetNextString(listFeatParentID, svFeatParent);
+        endwhile; // Pour chaque Feature 'root'
+      endif;
+
+      ListDestroy(listFeatParentID);  
+    endif;
+  else
+  endif;
+
+  // Pendant l'installation des données qui va suivre, on affiche le sablier et la petite fenêtre d'attente
+  SetStatusWindow(0, "");
+  Enable(STATUSEX);
+  Enable(HOURGLASS);
+  StatusUpdate(ON, 100);
+
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+
+  // On crée le répertoire pour être sûr que les données vont bien êtres écrites à cet endroit
+  CreateDir(INSTALLDIR);
+
+//  UninstallAllSoCoolFiles(); // On s'en va déjà désinstaller toutes les saloperies qui trainent dans le répertoire de SoCool
+
+  // Et c'est partiiiiii, on installe les fichiers et les clés de registre !
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+//////////////////////////////
+// --- OnFirstUIAfter() --- //
+//////////////////////////////
+function OnFirstUIAfter()
+  STRING svSrcOldFile, svSrcOldFileExt;
+  LIST   listDeleteFileID, listKeepFileID;
+  NUMBER nvResultOldFile;
+
+  STRING svProgram, svCmdLine, svTempo;
+  NUMBER nvResult, nvSize, nvType;
+
+  STRING svFeatParent, svFeatChild;
+  LIST   listFeatParentID, listFeatChildID;
+  NUMBER nvResultFeat;
+
+  STRING szTitle;
+  STRING szMsg1, szMsg2;
+  STRING szOption1, szOption2;
+  NUMBER bOpt1, bOpt2;
+begin 
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+  g_svNewLocation = INSTALLDIR^"\\"; // On récupère le véritable/nouveau chemin d'installation
+
+  LOG_QUEUED_SEQ("OnFirstUIAfter");
+  LOG_SET_STRING("Execute", "START");
+
+  LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+  LOG_SET_STRING("Path:NewLocation", g_svNewLocation^"\\");
+
+  // On déprotège la clé 'HKEY_LOCAL_MACHINE\SOFTWARE\Not' pour un accès en mode Utilisateur
+  RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+  KeyTreeUnprotect("SOFTWARE\\Not");
+
+  // Copie les fichiers de l'ancienne installation
+  if((g_svOldLocation != "") && (ExistsDir(g_svOldLocation) == EXISTS) && (g_svOldLocation != g_svNewLocation)) then
+    LOG_SET_STRING("Execute", "COPY OLD FILES");
+
+    LOG_ENABLE(FALSE); // Pour éviter de mettre ça dans le log d'InstallShield, et qu'il efface automatiquement les fichiers à la désinstallation (genre éviter de perdre un fichier de licence)
+    
+    listDeleteFileID = ListCreate(STRINGLIST);
+    listKeepFileID   = ListCreate(STRINGLIST);
+
+    if((listDeleteFileID == LIST_NULL) || (listKeepFileID == LIST_NULL))then
+      Disable(HOURGLASS);
+      SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+      Enable(HOURGLASS);
+    else
+      nvResultOldFile = FindAllFiles(g_svOldLocation, "*.*", svSrcOldFile, RESET);
+      while(nvResultOldFile == 0)
+        ParsePath(svSrcOldFileExt, svSrcOldFile, EXTENSION_ONLY);
+        if((svSrcOldFileExt % "gid") || (svSrcOldFileExt % "ldb") || (svSrcOldFileExt % "dll")) then // Et oui, les DLL foutuent à la main, on ne les gardes pas
+          if(ListAddString(listDeleteFileID, svSrcOldFile, AFTER) < 0) then
+            Disable(HOURGLASS);
+            SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+            Enable(HOURGLASS);
+          else
+          endif;
+        else
+          LOG_ADD_STREAM("File:List", svSrcOldFile);
+
+          if(ListAddString(listKeepFileID, svSrcOldFile, AFTER) < 0) then
+            Disable(HOURGLASS);
+            SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+            Enable(HOURGLASS);
+          else
+          endif;
+        endif;
+        nvResultOldFile = FindAllFiles(g_svOldLocation, "*.*", svSrcOldFile, CONTINUE);
+      endwhile;
+      nvResultOldFile = FindAllFiles(g_svOldLocation, "*.*", svSrcOldFile, CANCEL);
+
+      // On efface les fichiers inutiles
+      nvResultOldFile = ListGetFirstString(listDeleteFileID, svSrcOldFile);
+      while(nvResultOldFile != END_OF_LIST)
+        LOG_ADD_STREAM("File:Delete", svSrcOldFile);
+
+        SetFileInfo(svSrcOldFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
+        DeleteFile(svSrcOldFile); // On efface le fichier inutile
+
+        nvResultOldFile = ListGetNextString(listDeleteFileID, svSrcOldFile);
+      endwhile; // Pour chaque fichier 'inutiles' de listDeleteFileID
+
+      // On déplace les fichiers de l'ancien emplacement pour éviter de les copier (perte de temps et de place)
+      nvResultOldFile = ListGetFirstString(listKeepFileID, svSrcOldFile);
+      while(nvResultOldFile != END_OF_LIST)
+        // On déprotège tous les fichiers pour être sûr que l'ancien emplacement soit effacé
+        SetFileInfo(svSrcOldFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
+
+        svTempo = svSrcOldFile;
+        nvResultOldFile = ReplaceString(svTempo, g_svNewLocation, g_svOldLocation);
+        if(nvResultOldFile < 0) then
+        else
+          ParsePath(svProgram, svTempo, PATH);
+          CreateDir(svProgram); // Afin d'être sûr que le fichier est bien déplacé (si répertoire destination n'existe pas, ça plante)
+
+          SdShowMsg(@PRODUCT_NAME+" : "+@NOT_ISTXT_COPIE+svSrcOldFile+")", TRUE);
+          if(RenameFile(svSrcOldFile, svTempo) < 0) then // Déplace le fichier sans avoir à le copier
+          else
+            LOG_ADD_STREAM("File:Move:Src->Dst", svSrcOldFile+"->"+svTempo);
+
+            DeleteFile(svSrcOldFile); // On efface le fichier pour être sûr
+          endif;
+        endif;
+
+        nvResultOldFile = ListGetNextString(listKeepFileID, svSrcOldFile);
+      endwhile; // Pour chaque fichier 'inutiles' de listDeleteFileID
+
+      // On copie les fichiers restants de l'ancien emplacement dans le nouveau
+      svSrcOldFile = g_svOldLocation^"*.*";
+      SdShowMsg(@PRODUCT_NAME+" : "+@NOT_ISTXT_COPIE+svSrcOldFile+")", TRUE);
+      XCopyFile(svSrcOldFile, g_svNewLocation, COMP_NORMAL | INCLUDE_SUBDIR);
+
+      // A la fin, on efface l'ancien emplacement en entier
+      DeleteDir(g_svOldLocation, ALLCONTENTS);
+
+      ListDestroy(listDeleteFileID);
+      ListDestroy(listKeepFileID);
+
+      // On cherche TOUTES les valeurs de CURRENT_SETTING pour trouver l'ancien chemin que l'on va changer en nouveau chemin
+      LOG_SET_STRING("Execute", "MODIF PATH IN HKCU");
+      LOG_ADD_STREAM("Reg:ReplaceString:HKCU", g_svOldLocation+"->"+g_svNewLocation);
+
+      RegDBSetDefaultRoot(HKEY_CURRENT_USER);
+
+      listDeleteFileID = ListCreate(STRINGLIST);
+
+      if(listDeleteFileID == LIST_NULL) then
+        Disable(HOURGLASS);
+        SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+        Enable(HOURGLASS);
+      else
+        // ATTENTION : NE CHERCHER QUE DANS LA CLE DU PRODUIT, POUR EVITER DE MODIFIER DES CHEMINS DE CARTES OU AUTRES...
+        ListAddString(listDeleteFileID, "Software\\Not"^@PRODUCT_NAME, AFTER); // On inclus la clé de départ dans la recherche récursive
+        GetKeysSubLevelsIncluded(listDeleteFileID, "Software\\Not"^@PRODUCT_NAME);
+        nvResultOldFile = ListCount(listDeleteFileID);
+        if(nvResultOldFile <= 0) then
+          Disable(HOURGLASS);
+          SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+          Enable(HOURGLASS);
+        else
+          ReplaceValuesInKeys(listDeleteFileID, g_svNewLocation, g_svOldLocation);
+        endif;
+
+        ListDestroy(listDeleteFileID);  
+      endif;
+
+      // On cherche TOUTES les valeurs de LOCAL_MACHINE pour trouver l'ancien chemin que l'on va changer en nouveau chemin
+      LOG_SET_STRING("Execute", "MODIF PATH IN HKLM");
+      LOG_ADD_STREAM("Reg:ReplaceString:HKLM", g_svOldLocation+"->"+g_svNewLocation);
+
+      RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+
+      listDeleteFileID = ListCreate(STRINGLIST);
+
+      if(listDeleteFileID == LIST_NULL) then
+        Disable(HOURGLASS);
+        SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+        Enable(HOURGLASS);
+      else
+        // ATTENTION : NE CHERCHER QUE DANS LA CLE DU PRODUIT, POUR EVITER DE MODIFIER DES CHEMINS DE CARTES OU AUTRES...
+        ListAddString(listDeleteFileID, "SOFTWARE\\Not"^@PRODUCT_NAME, AFTER); // On inclus la clé de départ dans la recherche récursive
+        GetKeysSubLevelsIncluded(listDeleteFileID, "SOFTWARE\\Not"^@PRODUCT_NAME);
+        nvResultOldFile = ListCount(listDeleteFileID);
+        if(nvResultOldFile <= 0) then
+          Disable(HOURGLASS);
+          SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+          Enable(HOURGLASS);
+        else
+          ReplaceValuesInKeys(listDeleteFileID, g_svNewLocation, g_svOldLocation);
+        endif;
+
+        ListDestroy(listDeleteFileID);  
+      endif;
+    endif;
+    
+    LOG_ENABLE(TRUE);
+  else
+    // Pas d'ancienne installation OU même emplacement
+  endif;
+
+  SdShowMsg(@PRODUCT_NAME+" : "+@NOT_ISTXT_PATIENTEZ, TRUE);
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+  // Bon, une rustine de MEEEEERDE réclamée par Olivier BERNARD (honte à ce malheureux) pour supprimer d'éventuels raccourcis sur des Pays non installés...
+  if(g_svCommandLine % "-inst:TYPICAL") then
+    RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+
+    svCmdLine = ""; // La liste des Features à réinstaller
+
+    // Les listes de Features autres que 'Donnees' et 'Langage' (si leur sous-features ne sont pas déjà complètement sélectionnées)
+    listFeatParentID = ListCreate(STRINGLIST);
+
+    if(listFeatParentID == LIST_NULL) then
+      Disable(HOURGLASS);
+      SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+      Enable(HOURGLASS);
+    else
+      // On récupère la liste des Features 'root' ('Donnees', 'Langage', 'OutreMer', ...)
+      nvResultFeat = FeatureListItems(MEDIA, "", listFeatParentID);
+      if(nvResultFeat < 0) then
+      else
+        // Pour chaque Feature 'root', on va lister les enfants
+        nvResultFeat = ListGetFirstString(listFeatParentID, svFeatParent);
+        while(nvResultFeat != END_OF_LIST)
+          if((svFeatParent != "Donnees") && (svFeatParent != "Langage") && (svFeatParent != "Upgrade")) then
+            LOG_ADD_STRING("Feat:Parent", svFeatParent);
+          
+            // Si ce n'est pas un Feature 'root' classique, on vérifie son contenu
+// NE PAS OUBLIER DE MODIFIER CETTE PARTIE DE CODE EN FONCTION ...
+            if(svFeatParent == "OutreMer") then
+              svCmdLine = svCmdLine + "," + svFeatParent; // A réinstaller
+            elseif(svFeatParent == "Services") then
+            elseif(svFeatParent == "AutreFeature") then
+              // Ajouter ici les autres Features à gerer à fur-et-à-mesure de leur création. Attention à la transversalité (compatibilité du script/features entre les produits SoCool)                                                                                                                                                                  J'ai bien écrit transversalité, PAS transexualité ! Non mais...
+            else
+            endif;
+// ...DES FEATURES PRESENTENT DANS LES PRODUITS SOCOOL
+
+            listFeatChildID = ListCreate(STRINGLIST);
+
+            if(listFeatChildID == LIST_NULL) then
+              Disable(HOURGLASS);
+              SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+              Enable(HOURGLASS);
+            else
+              nvResultFeat = FeatureListItems(MEDIA, svFeatParent, listFeatChildID); // Attention, le Feature parent est inclus !
+              if(nvResultFeat < 0) then
+              else
+                nvResultFeat = ListGetFirstString(listFeatChildID, svFeatChild);
+                while(nvResultFeat != END_OF_LIST)
+// NE PAS OUBLIER DE MODIFIER CETTE PARTIE DE CODE EN FONCTION ...
+                  if(svFeatParent == "OutreMer") then
+                    // On vérifie si le Pays est installé, sinon on jarte le raccourcis...
+                    nvType = StrFind(svFeatChild, "\\");
+                    nvType = nvType + 1;
+                    nvSize = StrLength(svFeatChild);
+                    nvSize = nvSize - nvType; // On récupère le Feature enfant
+                    StrSub(svTempo, svFeatChild, nvType, nvSize);
+                    svTempo = "SOFTWARE\\Not\\Pays"^svTempo^"Production\\Not";
+
+                    nvResult = RegDBKeyExist(svTempo);
+                    if(nvResult < 0) then
+                      LOG_ADD_STRING("Feat:Child:Remove", svFeatChild);
+                      FeatureSelectItem(MEDIA, svFeatChild, FALSE); // Supprime le raccourcis
+                    else
+                      LOG_ADD_STRING("Feat:Child:Install", svFeatChild);
+                      FeatureSelectItem(MEDIA, svFeatChild, TRUE); // Force le raccourcis
+                    endif;
+                  elseif(svFeatParent == "Services") then
+                  elseif(svFeatParent == "AutreFeature") then
+                    // Ajouter ici les autres Features à gerer à fur-et-à-mesure de leur création. Attention à la transversalité (compatibilité du script/features entre les produits SoCool)                                                                                                                                                                  J'ai bien écrit transversalité, PAS transexualité ! Non mais...
+                  else
+                  endif;
+// ...DES FEATURES PRESENTENT DANS LES PRODUITS SOCOOL
+
+                  // On LOG la modif
+                  nvResult = FeatureIsItemSelected(MEDIA, svFeatChild);
+                  if(nvResult > 0) then
+                    svFeatChild = "[X] "+svFeatChild;
+                  else
+                    svFeatChild = "[ ] "+svFeatChild;
+                  endif;
+
+                  LOG_ADD_STRING("Feat:Child", svFeatChild);
+
+                  nvResultFeat = ListGetNextString(listFeatChildID, svFeatChild);
+                endwhile; // Pour chaque Feature 'enfant'
+              endif; // (nvResultFeat < 0)
+
+              ListDestroy(listFeatChildID);  
+            endif; // (listFeatChildID == LIST_NULL)
+          else
+          endif; // ((svFeatParent != "Donnees") && (svFeatParent != "Langage"))
+
+          nvResultFeat = ListGetNextString(listFeatParentID, svFeatParent);
+        endwhile; // Pour chaque Feature 'root'
+      endif;
+
+      ListDestroy(listFeatParentID);  
+    endif;
+
+    StrSub(svTempo, svCmdLine, 0, 1);
+    if(svTempo == ",") then
+      nvSize = StrLength(svCmdLine) - 1;
+      StrSub(svCmdLine, svCmdLine, 1, nvSize);
+    else
+    endif;
+
+    LOG_ADD_STRING("Feat:Reinstall:Features", svCmdLine);
+
+    nvResult = MsiSetProperty(ISMSI_HANDLE, "REINSTALL", svCmdLine); // La liste des Features à réinstaller
+    if(nvResult == ERROR_SUCCESS) then
+      LOG_ADD_STRING("Msi:SetProperty:Result", "ERROR_SUCCESS");
+    elseif(nvResult == ERROR_FUNCTION_FAILED) then
+      LOG_ADD_STRING("Msi:SetProperty:Result", "ERROR_FUNCTION_FAILED");
+    elseif(nvResult == ERROR_INVALID_HANDLE) then
+      LOG_ADD_STRING("Msi:SetProperty:Result", "ERROR_INVALID_HANDLE");
+    elseif(nvResult == ERROR_INVALID_PARAMETER) then
+      LOG_ADD_STRING("Msi:SetProperty:Result", "ERROR_INVALID_PARAMETER");
+    else
+      LOG_ADD_STRING("Msi:SetProperty:Result", "Unknown ERROR CODE");
+    endif;
+
+    svTempo = "";
+    nvSize = 256;
+    MsiGetProperty (ISMSI_HANDLE, "REINSTALLMODE", svTempo, nvSize);
+    MsiSetProperty(ISMSI_HANDLE, "REINSTALLMODE", "s"); // On ne touche qu'aux raccourcis
+
+//    // Théoriquement, réinitialise les flags d'installation pour FeatureTransferData !
+//    // En vérité, fait trop bien son job et réinitialise les flags de sélection aussi :/
+//    // Ducoup, pas de modification de l'installation par rapport aux modifs que l'on vient de faire !
+//    // Je laisse quand même ça pour celui qui me succedera (pas besoin de ré-écrire cette partie de code)
+//    nvResult = FeatureReinstall(); // Prépare les modifications
+//    if(nvResult < 0) then
+//      LOG_ADD_STRING("Feat:Reinstall:Result", "REJECTED");
+//    else
+//      LOG_ADD_STRING("Feat:Reinstall:Result", "ACCEPTED");
+//    endif;
+
+    // Bon alors dans la THEORIE InstallShieldienne, devrait (théoriquement donc) faire une sorte de 'commit' par rapport aux modifs précédentes.
+    // Dans la REALITE InstallShieldienne, ne marche pas. Enfin ne marche qu'une fois, et c'est entre OnFirstUIBefore et OnFirstUIAfter !
+    // Alors voilà, on a soit disans une fonction à disposition pour faire un 'commit', mais elle ne marche pas :/
+    // Je laisse ce morceau de bravoure ici, au cas où un jour, ^peut être, InstallShield décide de corriger ce bug at autorise cette fonction à marcher comme prévu
+    // D'ici là je plaind condescement mon successeur, qui devra alors déjà convertir les script d'InstallShield 8 à 11 ou 12, avec tous les bugs qu'il va rencontrer !
+    // Déjà que la mise à jour ne fonctionne pas quand on essaye de mettre à jour un produit installé avec InstallShield 8 par un produit packagé avec InstallShield 9 :/
+    // Mon pauvre successeur, je te plaind du fond du coeur, tu vas apprendre à tes dépends ce que veux dire tourmente et labeur :(
+    // Si jamais j'ai terminé mes scripts InnoSetup, utilise plutôt ceux-là !
+    nvResult = FeatureTransferData(MEDIA); // On modifie les Features demandés
+    if(nvResult < 0) then
+      LOG_ADD_STRING("Feat:TransferData:Result", "ERROR");
+    else
+      LOG_ADD_STRING("Feat:TransferData:Result", "DONE");
+    endif;
+
+    MsiSetProperty(ISMSI_HANDLE, "REINSTALLMODE", svTempo); // On remet comme avant
+  else
+  endif;
+
+  // On efface le sablier et la petite fenêtre d'attente
+  Disable(HOURGLASS);
+
+  SdShowMsg("", FALSE);
+
+  // Et c'est la fin de l'installation
+  bOpt1  = FALSE;
+  bOpt2  = FALSE;
+  szMsg1 = SdLoadString(IFX_SDFINISH_MSG1);
+  SdFinishEx(szTitle, szMsg1, szMsg2, szOption1, szOption2, bOpt1, bOpt2);
+
+  if(@AUTORUN == "TRUE") then
+    svProgram = g_svNewLocation^@NOT_SOCOOL+".exe";
+    svCmdLine = "-pays France"; // On démarre sur la France pour les neuneux
+    if(LaunchApp(svProgram, svCmdLine) < 0) then
+      // Si pb d'execution du programme , on s'en fout !
+      LOG_SET_STRING("AutoRun", "FAILED ("+svProgram+")");
+    else
+      LOG_SET_STRING("AutoRun", "EXECUTED ("+svProgram+")");
+    endif; // Si programme pas trouvé
+  else
+  endif;
+
+  // Après, ça passe encore par 'OnEnd()', si on veut effectuer quelques dernières opérations
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+///////////////////////////////
+// --- OnMaintUIBefore() --- //
+///////////////////////////////
+function OnMaintUIBefore()
+  STRING svKeyPath;
+  NUMBER nvResultKey;
+
+  STRING svSrcOldFile, svSrcOldFileExt;
+  LIST   listDeleteFileID;
+  NUMBER nvResultOldFile;
+
+  STRING szTitle, szMsg, svResult, szCaption;
+  NUMBER nvResult, nvSize;
+begin
+
+Dlg_Start:
+  Disable(HOURGLASS);
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+  g_svLogType = "MAINTENANCE";
+
+  LOG_QUEUED_SEQ("OnMaintUIBefore");
+  LOG_PRODUCTINF("Type", g_svLogType);
+  LOG_SET_STRING("Execute", "START");
+
+  LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+
+  // On affiche le choix de maintenance (Modifier, Réparer ou Supprimer)
+  Disable(BACKBUTTON);
+  g_nvInstall = SdWelcomeMaint(szTitle, szMsg, REMOVEALL);
+  Enable(BACKBUTTON);
+ 
+  // On sauve les drapeaux PlugIns et Reseau pour OnMaintUIAfter() !
+  RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+   
+  svKeyPath = "SOFTWARE\\Not"^@PRODUCT_NAME^"Partage\\PlugIns";
+  nvResultKey = RegDBKeyExist(svKeyPath);
+  if(nvResultKey < 0) then
+    // Le produit SOCOOL n'utilise pas PlugIns, donc on ne cherche pas à le désinstaller
+    g_bvPlugIns = FALSE;
+    LOG_SET_STRING("PlugIns", "NOT SUPPORTED");
+  else
+    g_bvPlugIns = TRUE;
+    LOG_SET_STRING("PlugIns", "SUPPORTED");
+  endif;
+
+  svKeyPath = "SOFTWARE\\Not"^@PRODUCT_NAME^"Partage\\Reseau";
+  nvResultKey = RegDBKeyExist(svKeyPath);
+  if(nvResultKey < 0) then
+    // Le produit SOCOOL n'utilise pas de Reseau, donc on ne cherche pas à les désinstaller
+    g_bvReseau = FALSE;
+    LOG_SET_STRING("Reseau", "NOT SUPPORTED");
+  else
+    LOG_SET_STRING("Reseau", "SUPPORTED");
+    g_bvReseau = TRUE;
+
+    g_listProdFournFilesID = ListCreate(STRINGLIST);
+
+    if(g_listProdFournFilesID == LIST_NULL) then
+      Disable(HOURGLASS);
+      SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+      Enable(HOURGLASS);
+    else
+      nvResultKey = RegDBQueryKey(svKeyPath, REGDB_KEYS, g_listProdFournFilesID);
+      if(nvResultKey < 0) then
+        // Pas de Fournisseur, on met alors au moins 'Not' (quoique ça ne devrait pas avoir lieu, vu que les nouvelles installation indiquent toutes les liste des Fournisseurs compatibles)
+        if(ListAddString(g_listProdFournFilesID, "Not", AFTER) < 0) then
+          Disable(HOURGLASS);
+          SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+          Enable(HOURGLASS);
+        else
+        endif; // Si pb ajout liste Partage
+      else
+      endif; // Si pas de Fournisseur
+    endif; // Pb init liste ProdFournItems
+  endif;
+
+  // Suivant le choix, on effectue les opérations demandées
+  if(g_nvInstall == MODIFY) then
+    LOG_SET_STRING("Maintenance:Type", "MODIFY");
+    g_svLogType = "MAINTENANCE -> MODIFY";
+    // ATTENTION : Dans le cadre d'un MODIFY du produit CartMachin, on va essayer d'installer des mises à jours à l'aide d'un CD/DVD, d'où la commande suivante !
+    g_svCommandLine = " /z\"-inst:CUSTOM\" /inst=\"CUSTOM\" "; // ATTENTION : Installation CUSTOM des mises à jour de PlugIns et des réseaux
+
+    // Si c'est supprimer, on demande les composants à ajouter/supprimer
+    szTitle = "";
+    szMsg   = "";
+    nvResult = SdFeatureTree(szTitle, szMsg, INSTALLDIR, "", 2);
+
+    if(nvResult == BACK) then 
+      goto Dlg_Start;
+    endif;
+  elseif(g_nvInstall == REPAIR) then
+    LOG_SET_STRING("Maintenance:Type", "REPAIR");
+    g_svLogType = "MAINTENANCE -> REPAIR";
+    g_svCommandLine = " /z\"-maint:REPAIR\" /maint=\"REPAIR\""; // En principe, on ne peut pas réparer les autres Setup
+
+//    FeatureReinstall(); // C'est fait en bas, mais je laisse pour l'instant, "au cas où..."
+  elseif(g_nvInstall == REMOVEALL) then
+    LOG_SET_STRING("Maintenance:Type", "REMOVEALL");
+    g_svLogType = "MAINTENANCE -> REMOVEALL";
+    g_svCommandLine = " /z\"-maint:REMOVEALL\" /maint=\"REMOVEALL\"";
+
+    // Si c'est supprimer, on demande confirmation
+    svResult  = SdLoadString(IFX_MAINTUI_MSG);
+    szCaption = SdLoadString(IFX_ONMAINTUI_CAPTION);
+
+    if(@AUTORUN == "TRUE") then
+      nvResult = IDOK;
+    else
+      nvResult = SprintfBox(MB_YESNO, szCaption, "%s", svResult);
+    endif;
+
+    if((nvResult == IDNO) || (nvResult == IDCANCEL)) then
+      LOG_SET_STRING("Execute", "REMOVEALL CANCELED");
+      LOG_QUEUED_SEQ("REMOVEALL ABORT");
+      LOG_PKG_RESULT("REMOVEALL CANCELED");
+
+      abort; // Ben oui, on ne veut PAS désinstaller ;)
+    else
+      // Si on désinstalle, on efface d'abord les fichiers inutiles
+      listDeleteFileID = ListCreate(STRINGLIST);
+
+      if(listDeleteFileID == LIST_NULL) then
+        Disable(HOURGLASS);
+        SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+        Enable(HOURGLASS);
+      else
+        nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, RESET);
+        while(nvResultOldFile == 0)
+          ParsePath(svSrcOldFileExt, svSrcOldFile, EXTENSION_ONLY);
+          if((svSrcOldFileExt == "gid") || (svSrcOldFileExt == "ldb") || (svSrcOldFileExt == "dll")) then // Et oui, les DLL foutuent à la main, on ne les gardes pas
+            if(ListAddString(listDeleteFileID, svSrcOldFile, AFTER) < 0) then
+              Disable(HOURGLASS);
+              SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+              Enable(HOURGLASS);
+            else
+            endif;
+          else
+          endif;
+          nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CONTINUE);
+        endwhile;
+        nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CANCEL);
+
+        // On efface les fichiers inutiles
+        nvResultOldFile = ListGetFirstString(listDeleteFileID, svSrcOldFile);
+        while(nvResultOldFile != END_OF_LIST)
+          LOG_ADD_STREAM("File:Delete", svSrcOldFile);
+
+          SetFileInfo(svSrcOldFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
+          DeleteFile(svSrcOldFile); // On efface le fichier inutile
+
+          nvResultOldFile = ListGetNextString(listDeleteFileID, svSrcOldFile);
+        endwhile; // Pour chaque fichier 'inutiles' de listDeleteFileID
+
+        ListDestroy(listDeleteFileID);
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+      endif;
+    endif;
+  else
+  endif;
+
+  // Pendant la désinstallation des données qui va suivre, on affiche le sablier et la petite fenêtre d'attente
+  SetStatusWindow(0, "");
+  Enable(STATUSEX);
+  Enable(HOURGLASS);
+  StatusUpdate(ON, 100);
+
+  // Bizarrement, cette ligne est importante, sinon le produit n'est pas correctement désinstallé et reste dans 'Ajout/Suppression de programme'
+  nvResult = NEXT;
+
+  // On effectue les opérations
+  if(g_nvInstall == MODIFY) then
+  elseif(g_nvInstall == REPAIR) then
+    FeatureReinstall();
+  elseif(g_nvInstall == REMOVEALL) then
+    FeatureRemoveAll();
+  else
+  endif;
+
+  // Et c'est partiii...
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+//////////////////////////////
+// --- OnMaintUIAfter() --- //
+//////////////////////////////
+function OnMaintUIAfter()
+  STRING szTitle;
+  STRING szMsg1, szMsg2;
+  STRING szOption1, szOption2;
+  NUMBER bOpt1, bOpt2;
+
+  STRING svSrcPaysReseau, svSrcLangageReseau, svSrcNomReseau;
+  LIST   listPaysFilesID, listPaysGuidID, listPaysListeID, listPaysPartageID;
+  NUMBER nvResultPays, nvResultNom, nvResultDesinstalle;
+
+  STRING svSrcVersionReseau;
+  STRING svSrcGuidReseau;
+
+  STRING svSrcOldFile, svSizeOldFile, svOldMedia;
+  LIST   listOldFileID;
+  NUMBER nvResultOldFile, nvNumberOldFile, nvSizeOldFile;
+
+  STRING svSrcProdNot, svNumberProdNot;
+  LIST listProdNotFilesID, listProdNotFournID; 
+  NUMBER nvResultProdNot, nvNumberProdNot;
+
+  STRING svSrcDataPath, svProgram, svCmdLine, svTempo;
+  NUMBER nvType, nvSize, nvTempo;
+begin
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+  LOG_QUEUED_SEQ("OnMaintUIAfter");
+  LOG_SET_STRING("Execute", "START");
+
+  SdShowMsg(@PRODUCT_NAME+" : "+@NOT_ISTXT_PATIENTEZ, TRUE);
+
+  // Si c'est une désinstallation
+  if(g_nvInstall == REMOVEALL) then
+    LOG_SET_STRING("Maintenance:Type", "REMOVEALL");
+
+    // Liste des fichiers non désinstallés
+    nvNumberOldFile = 0;
+
+    listOldFileID   = ListCreate(STRINGLIST);
+
+    if(listOldFileID == LIST_NULL) then
+      Disable(HOURGLASS);
+      SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+      Enable(HOURGLASS);
+    else
+      // On scanne les fichiers
+      nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, RESET);
+      while(nvResultOldFile == 0)
+        LOG_ADD_STREAM("File:List", svSrcOldFile);
+
+        if(ListAddString(listOldFileID, svSrcOldFile, AFTER) < 0) then
+          Disable(HOURGLASS);
+          SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+          Enable(HOURGLASS);
+        else
+        endif;
+        nvNumberOldFile = nvNumberOldFile + 1;
+        nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CONTINUE);
+      endwhile;
+      nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CANCEL);
+
+      // Si on a des fichiers 'utiles' qui restent, on en dresse la liste
+      if((@AUTORUN != "TRUE") && (nvNumberOldFile > 0)) then
+        NumToStr(svSrcOldFile, nvNumberOldFile);
+        if(nvNumberOldFile == 1) then
+          szMsg1 = svSrcOldFile + @NOT_ISTXT_FICH_NON_DESINST_SIN;
+        else
+          szMsg1 = svSrcOldFile + @NOT_ISTXT_FICH_NON_DESINST_PLU;
+        endif;
+
+        Disable(BACKBUTTON);
+        Disable(HOURGLASS);
+        nvResultOldFile = SdShowInfoList("", szMsg1, listOldFileID);
+        Enable(HOURGLASS);
+        Enable(BACKBUTTON);
+      else
+      endif;
+
+      ListDestroy(listOldFileID);
+    endif;
+
+    RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+  else // Si pas REMOVEALL
+    // On déprotège la clé 'HKEY_LOCAL_MACHINE\SOFTWARE\Not' pour un accès en mode Utilisateur
+    RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+    KeyTreeUnprotect("SOFTWARE\\Not");
+
+    if(g_nvInstall == MODIFY) then
+      LOG_SET_STRING("Maintenance:Type", "MODIFY");
+
+      // Si c'est une modification, on va chercher un CD et on va simuler une suite d'installation (ajout de réseau et touti-quanti)
+      svTempo      = g_svSetupExeDir;// @NOT_ISTXT_MODIF_ANNULE+@PRODUCT_NAME; // = g_svSetupExeDir;
+      nvType       = 0;
+      nvResultPays = NEXT;
+
+      while((nvResultPays == NEXT) && (ExistsDir(svTempo^"Pays") != EXISTS) && (ExistsDir(svTempo^"PlugIns") != EXISTS)) // Si NI "Pays" NI "PlugIns"
+//        Disable(BACKBUTTON); // Si on clique sur BACK, on fait comme si on cliquais sur CANCEL, mais SANS abandonner l'installation (BORDEL DIDIOUX)
+        Disable(HOURGLASS);
+        // On affiche la sélection du chemin d'installation...
+        nvResultPays = SdAskDestPath(@NOT_ISTXT_MODIF_TITRE+@PRODUCT_NAME, @NOT_ISTXT_MODIF_TEXTE+@PRODUCT_NAME, svTempo, nvType);
+        // ...tant que l'on n'a pas choisit un chemin valide (on peut toujours abandonner à ce niveau)
+//        Enable(BACKBUTTON);
+      endwhile;
+      Enable(HOURGLASS);
+
+      // (nvResultPays == CANCEL) : IMP.PO.SSI.BLE, ce con d'InstallShield simule un 'abort' ! Mais quel COOOOOOOONNAAAAAAAAAAAAAAARD...
+      if(nvResultPays == NEXT) then
+        // On récupère le chemin de base
+        g_svSetupExeDir = svTempo^"\\";
+        ParsePath(g_svSetupExeDisk, g_svSetupExeDir, DISK);
+
+        LOG_SET_STRING("Setup:ExeDisk", g_svSetupExeDisk);
+        LOG_SET_STRING("Setup:ExeDir",  g_svSetupExeDir);
+
+        // On essaye de récupérer le chemin d'installation de SOCOOL, si celui-ci à déjà été installé précédement
+        RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+        nvResultPays = RegDBGetKeyValueEx("SOFTWARE\\Not"^@PRODUCT_NAME, "Dossier", nvType, svSrcOldFile, nvSize);
+
+        if((nvResultPays == 0) && (svSrcOldFile != "")) then
+          // Si la clé existe alors on récupère sa valeur dans INSTALLDIR et on propose de réinstaller SOCOOL au même endroit
+          INSTALLDIR      = svSrcOldFile^"\\";
+          g_svOldLocation = INSTALLDIR; // Ancien emplacement
+        else
+          // Sinon, le chemin par défaut, qui est [Lecteur:]\\Program Files\\Not\\{SOCOOL}
+          INSTALLDIR      = ProgramFilesFolder^"\\Not"^@NOT_SOCOOL^"\\"; // Chemin commun pour certains produit !
+          g_svOldLocation = ""; // Pas de nouvel emplacement, chemin d'installation par défaut
+        endif;
+
+        LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+        LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+      else
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+// Si on veut abandonner plutôt que de terminer la maintenance
+//        LOG_SET_STRING("Execute", "MODIFY CANCELED");
+//        LOG_QUEUED_SEQ("MODIFY ABORT");
+//        LOG_PKG_RESULT("MODIFY CANCELED");
+
+//        abort;
+      endif;
+    else // Si pas MODIFY
+      LOG_SET_STRING("Maintenance:Type", "REPAIR");
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+    endif;
+  endif; // Désinstallation
+
+  // On efface le sablier et la petite fenêtre d'attente
+  Disable(HOURGLASS);
+
+  SdShowMsg("", FALSE);
+
+  bOpt1   = FALSE;
+  bOpt2   = FALSE;
+  szMsg1  = SdLoadString(IFX_SDFINISH_MAINT_MSG1);
+  szTitle = SdLoadString(IFX_SDFINISH_MAINT_TITLE);
+  SdFinishEx(szTitle, szMsg1, szMsg2, szOption1, szOption2, bOpt1, bOpt2);
+
+  // Après, ça passe encore par 'OnEnd()', si on veut effectuer quelques dernières opérations
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+///////////////////////////////
+// --- OnPatchUIBefore() --- //
+///////////////////////////////
+function OnPatchUIBefore()
   STRING szTitle, szMsg;
   NUMBER nvResult;
 
-  STRING svSrcFile, svSrcFeature;
-  NUMBER nvResultFile;
+  STRING svProgram, svCmdLine, svMessage;
+  LIST listKeyHklmSoftNotFilesID;
 begin
   Disable(HOURGLASS);
   Disable(STATUSEX);
   Disable(INDVFILESTATUS);
 
-  svLogType = "UPDATE";
+  g_svLogType = "PATCH";
 
-  LOG_QUEUED_SEQ("OnResumeUIBefore");
-  LOG_PRODUCTINF("Type", svLogType);
+  LOG_QUEUED_SEQ("OnPatchUIBefore");
+  LOG_PRODUCTINF("Type", g_svLogType);
   LOG_SET_STRING("Execute", "START");
 
-  LOG_SET_STRING("Path:OldLocation", svOldLocation^"\\");
+  LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
   LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+
+Dlg_SdPatchWelcome:
+  szTitle = "";
+  szMsg   = "";
+
+  Disable(BACKBUTTON);
+  nvResult = SdPatchWelcome(szTitle, szMsg);
+  Enable(BACKBUTTON);
+
+  if(nvResult == BACK) then
+    goto Dlg_SdPatchWelcome;
+  endif;
+
+  // Pendant le patch des données qui va suivre, on affiche le sablier et la petite fenêtre d'attente
+  SetStatusWindow(0, "");
+  Enable(STATUSEX);
+  Enable(HOURGLASS);
+  StatusUpdate(ON, 100);
+
+  // Et c'est partiiiiii, on installe les fichiers et les clés de registre !
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+//////////////////////////////
+// --- OnPatchUIAfter() --- //
+//////////////////////////////
+function OnPatchUIAfter()
+  STRING szTitle;
+  STRING szMsg1, szMsg2;
+  STRING szOption1, szOption2;
+  NUMBER bOpt1, bOpt2;
+
+  NUMBER nvSize;
+begin
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+  if(StrLength(g_svNewLocation) < 3) then
+    g_svNewLocation = INSTALLDIR^"\\"; // On récupère le véritable/nouveau chemin d'installation
+  else
+  endif;
+
+  if(StrLength(g_svNewLocation) < 3) then
+    g_svNewLocation = g_svOldLocation^"\\";
+  else
+  endif;
+
+  LOG_QUEUED_SEQ("OnPatchUIAfter");
+  LOG_SET_STRING("Execute", "START");
+
+  LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+  LOG_SET_STRING("Path:NewLocation", g_svNewLocation^"\\");
+
+  SdShowMsg(@PRODUCT_NAME+" : "+@NOT_ISTXT_PATIENTEZ, TRUE);
+
+  // On déprotège la clé 'HKEY_LOCAL_MACHINE\SOFTWARE\Not' pour un accès en mode Utilisateur
+  RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+  KeyTreeUnprotect("SOFTWARE\\Not");
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+  // OYEZ Oyez...
+  // La création des clés et des valeurs - NON VIDES - DOIT se faire sous l'IDE d'InstallShield, avec les paramètres que l'on veut
+  // L'affectation des nouvelles valeurs DOIT SE FAIRE ICI, dans l'InstallScript
+
+  RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+
+  // Le GUID pour la désinstallation automatique
+  LOG_SET_STRING("Guid", PRODUCT_GUID);
+  nvSize = -1; // StrLength(PRODUCT_GUID);
+  if(RegDBSetKeyValueEx("SOFTWARE\\Not"^@PRODUCT_NAME^"Production", "Identifiant", REGDB_STRING, PRODUCT_GUID, nvSize) < 0) then
+    SprintfBox(INFORMATION, "", @NOT_ISTXT_CLE_REG+"\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Not"^@PRODUCT_NAME^"Production\\Identifiant\n"+@NOT_ISTXT_CREAT_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+  else
+  endif;
+
+  // La Version de SOCOOL
+  LOG_SET_STRING("Version", @NOT_SOCOOLVERSION);
+  nvSize = -1; // StrLength(@NOT_SOCOOLVERSION);
+  if(RegDBSetKeyValueEx("SOFTWARE\\Not"^@PRODUCT_NAME^"Production", "Version", REGDB_STRING, @NOT_SOCOOLVERSION, nvSize) < 0) then
+    SprintfBox(INFORMATION, "", @NOT_ISTXT_CLE_REG+"\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Not"^@PRODUCT_NAME^"Production\\Version\n"+@NOT_ISTXT_CREAT_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+  else
+  endif;
+
+  // On efface le sablier et la petite fenêtre d'attente
+  Disable(HOURGLASS);
+
+  SdShowMsg("", FALSE);
+
+  bOpt1  = FALSE;
+  bOpt2  = FALSE;
+  szMsg1 = SdLoadString(IFX_SDFINISH_MSG1);
+  SdFinishEx(szTitle, szMsg1, szMsg2, szOption1, szOption2, bOpt1, bOpt2);
+
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+////////////////////////////////
+// --- OnResumeUIBefore() --- //
+////////////////////////////////
+function OnResumeUIBefore()
+  STRING svInstallDir;
+
+  STRING szTitle, szMsg;
+  NUMBER nvResult;
+begin
+  Disable(HOURGLASS);
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+  g_svLogType = "UPDATE";
+
+  LOG_QUEUED_SEQ("OnResumeUIBefore");
+  LOG_PRODUCTINF("Type", g_svLogType);
+  LOG_SET_STRING("Execute", "START");
+
+  svInstallDir = INSTALLDIR^"\\";
+
+  LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+  LOG_SET_STRING("Path:InstallDir", svInstallDir);
 
 Dlg_SdResumeWelcome:
 	szTitle = SdLoadString(ISWI_RESUMEUI_TITLE);
@@ -58,18 +1349,165 @@ Dlg_SdResumeWelcome:
   Enable(HOURGLASS);
   StatusUpdate(ON, 100);
 
+//  LOG_SET_STRING("INSTALLDIR:Before", INSTALLDIR^"\\");
+
+  UninstallAllSoCoolFiles(); // Comme ce CONNAAAAARD d'InstallShield à du mal à faire le boulot qu'on lui demande et pour quoi il est (théoriquement) prévu, on le fait à la mano !
+
+//  LOG_SET_STRING("INSTALLDIR:After", INSTALLDIR^"\\");
+
+  INSTALLDIR = svInstallDir; // Risque de générer une erreur sur certaines machines. Pas vérifié, mais probable avec InstallShield !
+
+//  LOG_SET_STRING("TARGETDIR:Reset", TARGETDIR^"\\");
+//  LOG_SET_STRING("INSTALLDIR:Reset", INSTALLDIR^"\\");
+
+  // Et c'est partiiiiii, on installe les fichiers et les clés de registre !
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+///////////////////////////////
+// --- OnResumeUIAfter() --- //
+///////////////////////////////
+function OnResumeUIAfter()
+  STRING szTitle;
+  STRING szMsg1, szMsg2;
+  STRING szOption1, szOption2;
+  NUMBER bOpt1, bOpt2;
+begin
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+  LOG_QUEUED_SEQ("OnResumeUIAfter");
+  LOG_SET_STRING("Execute", "START");
+
+//  LOG_SET_STRING("TARGETDIR:Remain", TARGETDIR^"\\");
+//  LOG_SET_STRING("INSTALLDIR:Remain", INSTALLDIR^"\\");
+
+  if(StrLength(g_svNewLocation) < 3) then
+    g_svNewLocation = INSTALLDIR^"\\"; // On récupère le véritable/nouveau chemin d'installation
+  else
+  endif;
+
+  if(StrLength(g_svNewLocation) < 3) then
+    g_svNewLocation = g_svOldLocation^"\\";
+  else
+  endif;
+
+  LOG_SET_STRING("Path:OldLocation", g_svOldLocation^"\\");
+  LOG_SET_STRING("Path:InstallDir", INSTALLDIR^"\\");
+  LOG_SET_STRING("Path:NewLocation", g_svNewLocation^"\\");
+
+  SdShowMsg(@PRODUCT_NAME+" : "+@NOT_ISTXT_PATIENTEZ, TRUE);
+
+  // On déprotège la clé 'HKEY_LOCAL_MACHINE\SOFTWARE\Not' pour un accès en mode Utilisateur
+  RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+  KeyTreeUnprotect("SOFTWARE\\Not");
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+  // On efface le sablier et la petite fenêtre d'attente
+  Disable(HOURGLASS);
+
+  SdShowMsg("", FALSE);
+
+  bOpt1  = FALSE;
+  bOpt2  = FALSE;
+  szMsg1 = SdLoadString(IFX_SDFINISH_MSG1);
+  SdFinishEx(szTitle, szMsg1, szMsg2, szOption1, szOption2, bOpt1, bOpt2);
+
+  LOG_SET_STRING("Execute", "PASSED");
+end;
+
+/////////////////////
+// --- OnEnd() --- //
+/////////////////////
+function OnEnd()
+begin
+  LOG_QUEUED_SEQ("OnEnd");
+  LOG_SET_STRING("Execute", "PASSED");
+  LOG_QUEUED_SEQ("EXITING");
+  LOG_FLUSH();
+
+  if(g_svLogType != "") then
+    g_svLogType = " "+g_svLogType;
+  else
+  endif;
+
+  LOG_PKG_RESULT("SUCCESS"+g_svLogType);
+end;
+
+////////////////////////////
+// --- OnFilesInUse() --- //
+////////////////////////////
+function OnFilesInUse(szMessage)
+  int nvResult, nvReserved;
+
+  STRING svLogSave;
+begin
+  svLogSave = g_svLogStep;
+
+  LOG_QUEUED_SEQ("OnFilesInUse");
+  LOG_SET_STRING("Execute", "START");
+
+  LOG_ADD_STRING("Message", szMessage);
+
+  if(g_nvFilesInUseLoop < 3) then
+    // On simule 'Ignorer' 3 fois, après on affiche quand même la boite de dialogue
+    g_nvFilesInUseLoop = g_nvFilesInUseLoop + 1;
+    nvResult = IDIGNORE;
+
+    LOG_SET_STRING("Execute", "COUNTING SPURIOUS MESSAGES");
+    LOG_SET_NUMBER("g_nvFilesInUseLoop", g_nvFilesInUseLoop);
+  else
+    // Si on n'en arrive là, c'est que la réservation des fichiers est vraiment tenace et que les 3 'ignorer' automatique n'ont rien donnés
+    nvReserved = 0;
+
+    Disable(HOURGLASS);
+    nvResult = SdFilesInUse("", "", szMessage, nvReserved);
+    Enable(HOURGLASS);
+
+    LOG_SET_STRING("Execute", "BLOCKED");
+  endif;
+
+  g_svLogStep = svLogSave;
+
+  return nvResult;
+end;
+
+//////////////////////////////////////
+// --- UninstallAllSoCoolFiles() --- //
+//////////////////////////////////////
+function UninstallAllSoCoolFiles()
+  STRING svSrcFile, svSrcFeature, svSrcPath;
+  NUMBER nvResultFile;
+
+  STRING svLogSave;
+begin
+  // Désinstalle tous les composants Ogc* qui peuvent être trouvés
+  svLogSave = g_svLogStep;
+
+  LOG_QUEUED_SEQ("UninstallAllSoCoolFiles");
+  LOG_SET_STRING("Execute", "START");
+
   LOG_ENABLE(FALSE); // Stoppe le log MSI
 
   // On s'assure que les fichiers binaires seront bien remplacés (forcément, si on les effaces, Windows Installer ne pourra que les remettres)
   nvResultFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcFile, svSrcFeature, RESET);
   while(nvResultFile == 0)
-    if(Is(FILE_EXISTS, svSrcFile) == TRUE) then
-      LOG_ADD_STRING("File:Delete", svSrcFile);
-
-      SetFileInfo(svSrcFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
-      DeleteFile(svSrcFile); // On efface le fichier inutile
+    if((svSrcFeature % "Global_") || (svSrcFeature % "Microsoft")) then
+     // On évite de toucher aux fichiers des merge module (Global_) et les fichiers dans des features systèmes (Microsoft)
     else
-      LOG_ADD_STRING("File:Found", svSrcFile);
+      ParsePath(svSrcPath, svSrcFile, PATH);
+
+      if((Is(FILE_EXISTS, svSrcFile) == TRUE) && (svSrcPath != "")) then
+        LOG_ADD_STRING("File:Delete", svSrcFile+" ("+svSrcFeature+")");
+
+        SetFileInfo(svSrcFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, ""); // On permet l'effacement du fichier
+        DeleteFile(svSrcFile); // On efface le fichier inutile
+      else
+        LOG_ADD_STRING("File:NotFound", svSrcFile+" ("+svSrcFeature+")");
+      endif;
     endif;
 
     nvResultFile = FindInstallFiles("*.exe|*.dll|*.dle|*.scr|*.com|*.pif", svSrcFile, svSrcFeature, CONTINUE);
@@ -78,14 +1516,479 @@ Dlg_SdResumeWelcome:
 
   LOG_ENABLE(TRUE);
 
-  // Et c'est partiiiiii, on installe les fichiers et les clés de registre !
   LOG_SET_STRING("Execute", "PASSED");
+
+  g_svLogStep = svLogSave;
 end;
 
-// PUT YOUR CODE THERE,
-// SUCH OnResumeUIAfter AND ALL
-// OTHER FUNCTION FROM
-// NEEDED EVENTS...
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+// Part removed because 'Not' specific (or legal reasons)
+// - - - 8< - - - - - - - - - - - - - - - - - - - - - - - -
+
+////////////////////////////////////////
+// --- GetKeysSubLevelsIncluded() --- //
+////////////////////////////////////////
+function GetKeysSubLevelsIncluded(listDestination, svSourcePath)
+  NUMBER nvResult, nvReturn, nvListSize;
+  STRING svCurrentSubKey, svTempoString;
+  LIST   listSourceSubKeys;
+begin
+  nvReturn = 0;
+
+  listSourceSubKeys = ListCreate(STRINGLIST);
+
+  if(listSourceSubKeys == LIST_NULL) then
+    nvReturn = nvReturn - 1;
+  else
+    nvResult = RegDBQueryKey(svSourcePath, REGDB_KEYS, listSourceSubKeys);
+    if(nvResult < 0) then
+      nvReturn = nvReturn - 1;
+    else
+      nvResult = ListGetFirstString(listSourceSubKeys, svCurrentSubKey);
+      while(nvResult != END_OF_LIST)
+        svTempoString = svSourcePath^svCurrentSubKey;
+        
+        if(ListAddString(listDestination, svTempoString, AFTER) < ISERR_SUCCESS) then
+          nvReturn = nvReturn - 1;
+        else
+        endif;
+        nvListSize = GetKeysSubLevelsIncluded(listDestination, svTempoString);
+        nvReturn = nvReturn + nvListSize;
+
+        nvResult = ListGetNextString(listSourceSubKeys, svCurrentSubKey);
+      endwhile; // Pour chaque sous-clé
+    endif; // Si pas de sous-clés
+
+    ListDestroy(listSourceSubKeys);  
+  endif; // Si erreur dans la création de la liste
+
+  return nvReturn;
+end;
+
+///////////////////////////////////
+// --- ReplaceValuesInKeys() --- //
+///////////////////////////////////
+function ReplaceValuesInKeys(listSource, svDestination, svSource)
+  NUMBER nvResult, nvSource, nvValue;
+  NUMBER nvType, nvSize;
+  STRING svCurrentSubKey, svCurrentValue, svTempoString, svTempo;
+  LIST   listSourceValues;
+
+  STRING svLogSave;
+begin
+  svLogSave = g_svLogStep;
+
+  LOG_QUEUED_SEQ("ReplaceValuesInKeys");
+  LOG_SET_STRING("Execute", "START");
+
+  LOG_ADD_STREAM("ReplaceValuesInKeys:Src->Dst", svSource+"->"+svDestination);
+
+  nvSource = ListGetFirstString(listSource, svCurrentSubKey);
+  while(nvSource != END_OF_LIST)
+    listSourceValues = ListCreate(STRINGLIST);
+
+    if(listSourceValues == LIST_NULL) then
+    else
+      nvResult = RegDBQueryKey(svCurrentSubKey, REGDB_NAMES, listSourceValues);
+      if(nvResult < 0) then
+      else
+        nvResult = ListGetFirstString(listSourceValues, svCurrentValue);
+        while(nvResult != END_OF_LIST)
+
+          nvValue = RegDBGetKeyValueEx(svCurrentSubKey, svCurrentValue, nvType, svTempoString, nvSize);
+          if(nvValue < 0) then
+          else
+            if(nvType == REGDB_STRING) then
+              svTempo = svTempoString;
+
+              nvValue = ReplaceString(svTempoString, svDestination, svSource);
+              if(nvValue < 0) then
+              else
+                LOG_ADD_STREAM("ReplaceValuesInKeys:Key:Value:Old->New", svCurrentSubKey+"="+svCurrentValue+":"+svTempo+"->"+svTempoString);
+
+                nvSize = -1; // StrLength(svTempoString);
+                RegDBSetKeyValueEx(svCurrentSubKey, svCurrentValue, REGDB_STRING, svTempoString, nvSize);
+              endif;
+            else
+            endif;
+          endif;
+
+          nvResult = ListGetNextString(listSourceValues, svCurrentValue);
+        endwhile; // Pour chaque valeur
+      endif;
+
+      ListDestroy(listSourceValues);  
+    endif; // Si erreur dans la création de la liste
+
+    nvSource = ListGetNextString(listSource, svCurrentSubKey);
+  endwhile; // Pour chaque sous-clé
+
+  LOG_SET_STRING("Execute", "PASSED");
+
+  g_svLogStep = svLogSave;
+end;
+
+/////////////////////////////
+// --- ReplaceString() --- //
+/////////////////////////////
+function ReplaceString(svBuffer, svDestination, svSource)
+  NUMBER nvReturn, nvResult, nvSrcLen, nvDstLen;
+  STRING svTempoStringStart, svTempoStringEnd, svTempo;
+begin
+  Disable(LOGGING);
+
+  svTempo = svBuffer;
+  nvReturn = 0;
+
+  if((svSource != "") && (svSource != svDestination)) then
+    nvResult = StrFind(svBuffer, svSource);
+    while(nvResult >= 0)
+      nvSrcLen = StrLength(svSource);
+      nvDstLen = StrLength(svBuffer);
+
+      nvSrcLen = nvSrcLen + nvResult; // Pos après Source
+      nvDstLen = nvDstLen - nvSrcLen; // Len après Source
+
+      StrSub(svTempoStringStart, svBuffer, 0,        nvResult); // Avant Source
+      StrSub(svTempoStringEnd,   svBuffer, nvSrcLen, nvDstLen); // Après source
+
+      svBuffer = svTempoStringStart+svDestination+svTempoStringEnd; // On renvoie la chaine modifiée
+
+      nvReturn = nvReturn + 1;
+
+      nvResult = StrFind(svBuffer, svSource);
+    endwhile;
+  else
+  endif;
+
+  if(nvReturn == 0) then
+    nvReturn = nvReturn - 1;
+  else
+//    LOG_ADD_STREAM("ReplaceString:Old->New", svTempo+"->"+svBuffer);
+  endif;
+
+  LOG_RESET();
+
+  return nvReturn;
+end;
+
+/////////////////////////////
+// --- KeyTreeNumber() --- //
+/////////////////////////////
+function KeyTreeNumber(svSource)
+  NUMBER nvResult;
+  STRING svProgram, svCmdLine;
+  LIST listKeyHklmSoftNotFilesID;
+
+//  STRING svLogSave;
+begin
+//  svLogSave = g_svLogStep;
+
+//  LOG_QUEUED_SEQ("KeyTreeNumber");
+//  LOG_SET_STRING("Execute", "START");
+
+//  LOG_ADD_STREAM("KeyTreeNumber:Source", svSource);
+
+  listKeyHklmSoftNotFilesID = ListCreate(STRINGLIST);
+
+  if(listKeyHklmSoftNotFilesID == LIST_NULL) then
+//    LOG_SET_STRING("Execute", "FAILED (no memory allocated)");
+
+    SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+  else                                  
+//    LOG_ENABLE(FALSE); // On ne sauve pas dans le LOG MSI ce qu'il va se passer à présent !
+
+    nvResult = RegDBQueryKey(svSource, REGDB_KEYS, listKeyHklmSoftNotFilesID);
+
+    if(nvResult < 0) then
+      // Si pb d'execution du programme, on s'en fout...
+      // ...en fait, c'est juste qu'il n'y a pas d'autorisation sur les clés !
+//      LOG_SET_STRING("Execute", "FAILED");
+    else
+//      LOG_SET_STRING("Execute", "PASSED");
+
+      nvResult = ListCount(listKeyHklmSoftNotFilesID);
+    endif; // Si programme pas trouvé
+
+//    LOG_ENABLE(TRUE);
+
+    ListDestroy(listKeyHklmSoftNotFilesID);
+  endif; // Si pb d'init des listes ProdNot
+
+//  g_svLogStep = svLogSave;
+
+  if(nvResult == 0) then
+    nvResult = nvResult - 1;
+  else
+  endif;
+
+  return nvResult;
+end;
+
+///////////////////////////
+// --- KeyTreeRead() --- //
+///////////////////////////
+function KeyTreeRead(listStore, svSource)
+  NUMBER nvResultKeys, nvResultValues, nvResultMultiple;
+  NUMBER nvType, nvSize;
+
+  STRING svCurrentKey, svCurrentName, svCurrentValue, svTempo, svType, svSize;
+
+  LIST   listSourceKeys, listSourceValues, listSourceMultiple;
+begin
+  listSourceKeys   = ListCreate(STRINGLIST);
+  listSourceValues = ListCreate(STRINGLIST);
+
+  if((listSourceKeys == LIST_NULL) || (listSourceValues == LIST_NULL)) then
+  else                                  
+    nvResultKeys   = RegDBQueryKey(svSource, REGDB_KEYS,  listSourceKeys);
+    nvResultValues = RegDBQueryKey(svSource, REGDB_NAMES, listSourceValues);
+
+    if(nvResultKeys < 0) then
+    else
+      // S'il y a des sous-clés, on s'en va les traiter récursivement
+      nvResultKeys = ListGetFirstString(listSourceKeys, svCurrentKey);
+      while(nvResultKeys != END_OF_LIST)
+        KeyTreeRead(listStore, svSource^svCurrentKey); // On plonge
+
+        nvResultKeys = ListGetNextString(listSourceKeys, svCurrentKey);
+      endwhile; // Pour chaque valeur
+    endif;
+
+    if(nvResultValues < 0) then
+    else
+      // S'il y a des valeurs, on les lits toutes
+      nvResultValues = ListGetFirstString(listSourceValues, svCurrentName);
+      while(nvResultValues != END_OF_LIST)
+        nvResultValues = RegDBGetKeyValueEx(svSource, svCurrentName, nvType, svCurrentValue, nvSize);
+        if(nvResultValues < 0) then
+          // Si pas de Valeur
+        else
+          svSize = "";
+
+          if(nvType == REGDB_STRING) then
+            svType = "REGDB_STRING";
+          elseif(nvType == REGDB_STRING_EXPAND) then
+            svType = "REGDB_STRING_EXPAND";
+          elseif(nvType == REGDB_STRING_MULTI) then
+            svType = "REGDB_STRING_MULTI";
+            NumToStr(svSize, nvSize);
+            svSize = "("+svSize+")";
+
+            listSourceMultiple = ListCreate(STRINGLIST);
+
+            if(listSourceMultiple == LIST_NULL) then
+            else
+              StrGetTokens(listSourceMultiple, svCurrentValue, "");
+              svCurrentValue = "";
+
+              nvResultValues = ListGetFirstString(listSourceMultiple, svTempo);
+              while(nvResultValues != END_OF_LIST)
+                if(svCurrentValue == "") then
+                  svCurrentValue = svTempo;
+                else
+                  svCurrentValue = svCurrentValue+"|"+svTempo;
+                endif;
+                nvResultValues = ListGetNextString(listSourceMultiple, svTempo);
+              endwhile; // Pour chaque valeur
+
+              ListDestroy(listSourceMultiple);
+            endif; // Si pb d'init des listes
+          elseif(nvType == REGDB_NUMBER) then
+            svType = "REGDB_NUMBER";
+          elseif(nvType == REGDB_BINARY) then
+            svType = "REGDB_BINARY";
+            NumToStr(svSize, nvSize);
+            svSize = "("+svSize+")";
+          else
+            svType = "REGDB_STRING";
+          endif;
+
+          if(ListAddString(listStore, svSource^"::"+svType+svSize+"::"+svCurrentName+"=="+svCurrentValue, AFTER) < 0) then
+          else
+          endif; // Si pb ajout liste ProdNotFourn
+        endif;
+
+        nvResultValues = ListGetNextString(listSourceValues, svCurrentName);
+      endwhile; // Pour chaque valeur
+    endif;
+
+    ListDestroy(listSourceValues);
+    ListDestroy(listSourceKeys);
+  endif; // Si pb d'init des listes
+end;
+
+////////////////////////////
+// --- KeyTreeWrite() --- //
+////////////////////////////
+function KeyTreeWrite(listStore)
+  NUMBER nvResultKeys, nvResultValues, nvResultMultiple;
+  NUMBER nvStart, nvLength, nvType, nvSize;
+
+  STRING svCurrentKey, svCurrentName, svCurrentValue, svTempo, svBuffer, svType, svSize;
+
+  LIST   listSourceMultiple;
+begin
+  nvResultKeys = ListGetFirstString(listStore, svBuffer);
+  while(nvResultKeys != END_OF_LIST)
+    nvSize = 0-1;
+    svSize = "";
+
+    // On récupère la clé
+    nvStart  = 0;
+    nvLength = StrFind(svBuffer, "\::");
+    StrSub(svCurrentKey, svBuffer, nvStart, nvLength);
+
+    // On récupère le type et la taille
+    nvStart  = nvLength + 3;
+    nvLength = StrLength(svBuffer);
+    StrSub(svTempo, svBuffer, nvStart, nvLength - nvStart);
+    svBuffer = svTempo;
+
+    nvStart  = 0;
+    nvLength = StrFind(svBuffer, "::");
+    StrSub(svType, svBuffer, nvStart, nvLength);
+
+    // On récupère la valeur et son contenu
+    nvStart  = nvLength + 2;
+    nvLength = StrLength(svBuffer);
+    StrSub(svTempo, svBuffer, nvStart, nvLength - nvStart);
+    svBuffer = svTempo;
+
+    nvStart  = 0;
+    nvLength = StrFind(svBuffer, "==");
+    StrSub(svCurrentName, svTempo, nvStart, nvLength);
+
+    nvStart  = nvLength + 2;
+    nvLength = StrLength(svBuffer);
+    StrSub(svCurrentValue, svTempo, nvStart, nvLength - nvStart);
+
+    // On récupère la taille
+    nvStart  = StrFind(svBuffer, "(");
+    if(nvStart < 0) then
+    else
+      nvLength = StrFind(svBuffer, ")") - nvStart - 1;
+      StrSub(svSize, svType, nvStart, nvLength);
+      nvLength = 0;
+      StrSub(svTempo, svType, nvLength, nvStart);
+      svType = svTempo;
+    endif;
+
+    nvSize = 0-1; // Ca fait -1 :)
+
+    if(svType == "REGDB_STRING") then
+      nvType = REGDB_STRING;
+    elseif(svType == "REGDB_STRING_EXPAND") then
+      nvType = REGDB_STRING_EXPAND;
+    elseif(svType == "REGDB_STRING_MULTI") then
+      nvType = REGDB_STRING_MULTI;
+      StrToNum(nvSize, svSize);
+
+      listSourceMultiple = ListCreate(STRINGLIST);
+
+      if(listSourceMultiple == LIST_NULL) then
+      else
+        StrGetTokens(listSourceMultiple, svCurrentValue, "|");
+        svCurrentValue = "";
+
+        nvResultValues = ListGetFirstString(listSourceMultiple, svTempo);
+        while(nvResultValues != END_OF_LIST)
+          if(svCurrentValue == "") then
+            svCurrentValue = svTempo;
+          else
+            svCurrentValue = svCurrentValue+"\0"+svTempo;
+          endif;
+          nvResultValues = ListGetNextString(listSourceMultiple, svTempo);
+        endwhile; // Pour chaque valeur
+
+        svCurrentValue = svCurrentValue+"\0\0";
+
+        ListDestroy(listSourceMultiple);
+      endif; // Si pb d'init des listes
+    elseif(svType == "REGDB_NUMBER") then
+      nvType = REGDB_NUMBER;
+    elseif(svType == "REGDB_BINARY") then
+      nvType = REGDB_BINARY;
+      StrToNum(nvSize, svSize);
+    else
+      nvType = REGDB_STRING;
+    endif;
+
+    nvSize = -1; // StrLength(svCurrentValue);
+    RegDBSetKeyValueEx(svCurrentKey, svCurrentName, nvType, svCurrentValue, nvSize);
+
+    nvResultKeys = ListGetNextString(listStore, svBuffer);
+  endwhile; // Pour chaque valeur
+end;
+
+////////////////////////////////
+// --- KeyTreeUnprotect() --- //
+////////////////////////////////
+function KeyTreeUnprotect(svSource)
+  NUMBER nvResult;
+  STRING svProgram, svCmdLine;
+  LIST listKeyHklmSoftNotFilesID;
+
+  STRING svLogSave;
+begin
+  svLogSave = g_svLogStep;
+
+  LOG_QUEUED_SEQ("KeyTreeUnprotect");
+  LOG_SET_STRING("Execute", "START");
+
+  LOG_ADD_STREAM("KeyTreeUnprotect:Source", svSource);
+
+  listKeyHklmSoftNotFilesID = ListCreate(STRINGLIST);
+
+  if(listKeyHklmSoftNotFilesID == LIST_NULL) then
+    LOG_SET_STRING("Execute", "FAILED (no memory allocated)");
+
+//    SprintfBox(SEVERE, "", @NOT_ISTXT_PRG_INST_DU+@PRODUCT_NAME+@NOT_ISTXT_INIT_LST_KO+"\nA%d-LN %ld> ", g_nvVerScript, __LINE__);
+  else                                  
+    LOG_ENABLE(FALSE); // On ne sauve pas dans le LOG MSI ce qu'il va se passer à présent !
+
+    // On sauve toutes les clés depuis 'Production' du Fournisseur
+    KeyTreeRead(listKeyHklmSoftNotFilesID, svSource);
+
+    // On efface la clé 'HKEY_LOCAL_MACHINE\SOFTWARE\Not'
+    if(RegDBDeleteKey(svSource) < 0) then
+    else
+    endif;
+
+    // On crée la clé 'HKEY_LOCAL_MACHINE\SOFTWARE\Not' avec autorisation en mode Utilisateur
+    svProgram = WINSYSDIR^"CreateReg.exe"; // Peut ne pas être installé avec le produit SOCOOL
+    svCmdLine = "HKLM SOFTWARE\\Not";
+    nvResult = LaunchAppAndWait(svProgram, svCmdLine, WAIT);
+    
+    // Si pas de programme trouvé, pas de création de la clé avec autorisation,
+    // donc on réinstalle toutes les clés sans autorisation avec KeyTreeWrite()
+
+    // On remet toutes les clés en place
+    KeyTreeWrite(listKeyHklmSoftNotFilesID);
+
+    if(nvResult < 0) then
+      // Si pb d'execution du programme, on s'en fout...
+      // ...en fait, c'est juste qu'il n'y a pas d'autorisation sur les clés !
+      LOG_SET_STRING("Execute", "FAILED");
+    else
+      LOG_SET_STRING("Execute", "PASSED");
+    endif; // Si programme pas trouvé
+
+    LOG_ENABLE(TRUE);
+
+    ListDestroy(listKeyHklmSoftNotFilesID);
+  endif; // Si pb d'init des listes ProdNot
+
+  g_svLogStep = svLogSave;
+end;
 
 ////////////////////////////////
 // --- FindInstallFiles() --- //
@@ -97,13 +2000,14 @@ begin
   if(nvMode == RESET) then
 //    LOG_ADD_STREAM("FindInstallFiles:Find", "RESET");
 
-    ListDestroy(listInstallWildID);
+    ListDestroy(g_listInstallWildID);
 
-    listInstallWildID = ListCreate(STRINGLIST);
-    if(listInstallWildID == LIST_NULL) then
+    g_listInstallWildID = ListCreate(STRINGLIST);
+
+    if(g_listInstallWildID == LIST_NULL) then
     else
-      svInstallWild = svWild;
-      svWildTest    = svWild;
+      g_svInstallWild = svWild;
+      svWildTest      = svWild;
 
       // Remove heading delimiters
       StrSub(svTempo, svWildTest, 0, 1);
@@ -127,30 +2031,30 @@ begin
 
 //      LOG_ADD_STREAM("FindInstallFiles:Wild", svWildTest);
 
-      if(StrGetTokens(listInstallWildID, svWildTest, "|") < 0) then
+      if(StrGetTokens(g_listInstallWildID, svWildTest, "|") < 0) then
 //        LOG_ADD_STREAM("FindInstallFiles:TokenWild", "ERROR");
       else
-        ListDestroy(listInstallFeatureID);
-        ListDestroy(listInstallPathID);
+        ListDestroy(g_listInstallFeatureID);
+        ListDestroy(g_listInstallPathID);
 
-        listInstallFeatureID = ListCreate(STRINGLIST);
-        listInstallPathID    = ListCreate(STRINGLIST);
+        g_listInstallFeatureID = ListCreate(STRINGLIST);
+        g_listInstallPathID    = ListCreate(STRINGLIST);
 
-        if((listInstallFeatureID == LIST_NULL) || (listInstallPathID == LIST_NULL)) then
+        if((g_listInstallFeatureID == LIST_NULL) || (g_listInstallPathID == LIST_NULL)) then
         else
-          if(ListInstallFiles(listInstallFeatureID, listInstallPathID) != ERROR_SUCCESS) then
+          if(ListInstallFiles(g_listInstallFeatureID, g_listInstallPathID) != ERROR_SUCCESS) then
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "NOT LISTED");
           else
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "LISTED SUCCESS");
 
-            nvResult = ListGetFirstString(listInstallPathID, svTempoFile);
-                       ListGetFirstString(listInstallFeatureID, svTempoFeature);
+            nvResult = ListGetFirstString(g_listInstallPathID, svTempoFile);
+                       ListGetFirstString(g_listInstallFeatureID, svTempoFeature);
             while(nvResult != END_OF_LIST)
 //              LOG_ADD_STREAM("FindInstallFiles:Find", "RESET : "+svTempo);
 
               ParsePath(svTempo, svTempoFile, FILENAME); // Limit compare
 
-              nvResult = ListGetFirstString(listInstallWildID, svWildTest);
+              nvResult = ListGetFirstString(g_listInstallWildID, svWildTest);
               while(nvResult != END_OF_LIST)
                 if(WildCompare(svTempo, svWildTest, TRUE) == TRUE) then
 //                  LOG_ADD_STREAM("FindInstallFiles:Wild", "MATCH : "+svWildTest+" vs "+svTempo);
@@ -163,11 +2067,11 @@ begin
 //                  LOG_ADD_STREAM("FindInstallFiles:Wild", "MISMATCH : "+svWildTest+" vs "+svTempo);
                 endif;
 
-                nvResult = ListGetNextString(listInstallWildID, svWildTest);
+                nvResult = ListGetNextString(g_listInstallWildID, svWildTest);
               endwhile;
 
-              nvResult = ListGetNextString(listInstallPathID, svTempoFile);
-                         ListGetNextString(listInstallFeatureID, svTempoFeature);
+              nvResult = ListGetNextString(g_listInstallPathID, svTempoFile);
+                         ListGetNextString(g_listInstallFeatureID, svTempoFeature);
             endwhile;
 
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "RESET - EOL");
@@ -176,15 +2080,15 @@ begin
       endif;
     endif;
   elseif(nvMode == CONTINUE) then
-    if(svInstallWild == svWild) then
-      nvResult = ListGetNextString(listInstallPathID, svTempoFile);
-                 ListGetNextString(listInstallFeatureID, svTempoFeature);
+    if(g_svInstallWild == svWild) then
+      nvResult = ListGetNextString(g_listInstallPathID, svTempoFile);
+                 ListGetNextString(g_listInstallFeatureID, svTempoFeature);
       while(nvResult != END_OF_LIST)
 //        LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE : "+svTempo);
 
         ParsePath(svTempo, svTempoFile, FILENAME); // Limit compare
 
-        nvResult = ListGetFirstString(listInstallWildID, svWildTest);
+        nvResult = ListGetFirstString(g_listInstallWildID, svWildTest);
         while(nvResult != END_OF_LIST)
           if(WildCompare(svTempo, svWildTest, TRUE) == TRUE) then
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - MATCH : "+svWildTest+" vs "+svTempo);
@@ -197,11 +2101,11 @@ begin
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - MISMATCH : "+svWildTest+" vs "+svTempo);
           endif;
 
-          nvResult = ListGetNextString(listInstallWildID, svWildTest);
+          nvResult = ListGetNextString(g_listInstallWildID, svWildTest);
         endwhile;
 
-        nvResult = ListGetNextString(listInstallPathID, svTempoFile);
-                   ListGetNextString(listInstallFeatureID, svTempoFeature);
+        nvResult = ListGetNextString(g_listInstallPathID, svTempoFile);
+                   ListGetNextString(g_listInstallFeatureID, svTempoFeature);
       endwhile;
 
 //      LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - EOL");
@@ -209,15 +2113,15 @@ begin
 //      LOG_ADD_STREAM("FindInstallFiles:Find", "CONTINUE - WILD MISMATCH");
     endif;
   elseif(nvMode == REWIND) then
-    if(svInstallWild == svWild) then
-      nvResult = ListGetFirstString(listInstallPathID, svTempoFile);
-                 ListGetFirstString(listInstallFeatureID, svTempoFeature);
+    if(g_svInstallWild == svWild) then
+      nvResult = ListGetFirstString(g_listInstallPathID, svTempoFile);
+                 ListGetFirstString(g_listInstallFeatureID, svTempoFeature);
       while(nvResult != END_OF_LIST)
 //        LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND : "+svTempo);
 
         ParsePath(svTempo, svTempoFile, FILENAME); // Limit compare
 
-        nvResult = ListGetFirstString(listInstallWildID, svWildTest);
+        nvResult = ListGetFirstString(g_listInstallWildID, svWildTest);
         while(nvResult != END_OF_LIST)
           if(WildCompare(svTempo, svWildTest, TRUE) == TRUE) then
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND - MATCH : "+svWildTest+" vs "+svTempo);
@@ -230,11 +2134,11 @@ begin
 //            LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND - MISMATCH : "+svWildTest+" vs "+svTempo);
           endif;
 
-          nvResult = ListGetNextString(listInstallWildID, svWildTest);
+          nvResult = ListGetNextString(g_listInstallWildID, svWildTest);
         endwhile;
 
-        nvResult = ListGetNextString(listInstallPathID, svTempoFile);
-                   ListGetNextString(listInstallFeatureID, svTempoFeature);
+        nvResult = ListGetNextString(g_listInstallPathID, svTempoFile);
+                   ListGetNextString(g_listInstallFeatureID, svTempoFeature);
       endwhile;
 
 //      LOG_ADD_STREAM("FindInstallFiles:Find", "REWIND - EOL");
@@ -244,8 +2148,8 @@ begin
   elseif(nvMode == CANCEL) then
 //    LOG_ADD_STREAM("FindInstallFiles:Find", "CANCEL");
 
-    ListDestroy(listInstallFeatureID);
-    ListDestroy(listInstallPathID);
+    ListDestroy(g_listInstallFeatureID);
+    ListDestroy(g_listInstallPathID);
   else
   endif;
 
@@ -737,3 +2641,294 @@ begin
   endif;
 end;
 
+////////////////////////
+// --- LOG_INIT() --- //
+////////////////////////
+function LOG_INIT()
+  NUMBER nvSize, nvLenght;
+  STRING svDate, svTime, svTempo, svPackage, svVersion;
+begin
+  g_svLogDateTime = "";
+  g_svLogType = "";
+
+  Disable(LOGGING);
+  
+  if(GetSystemInfo(DATE, nvSize, svDate) < 0) then
+  else
+    // Month
+    nvSize = StrFind(svDate, "-");
+    StrSub(svTempo, svDate, 0, nvSize);
+    if(nvSize < 2) then
+      svTempo = "0" + svTempo; // MM
+    else
+    endif;
+    
+    nvSize   = nvSize + 1;
+    nvLenght = StrLength(svDate) - nvSize;
+    StrSub(svDate, svDate, nvSize, nvLenght); // ?D-YYYY
+
+    // Day
+    nvSize = StrFind(svDate, "-");
+    StrSub(svTime, svDate, 0, nvSize);
+    if(nvSize < 2) then
+      svTime = "0" + svTime; // DD
+    else
+    endif;
+
+    g_svLogDateTime = svTempo+svTime; // MMDD
+    svTempo = "-"+svTempo+"-"+svTime; // -MM-DD
+
+    nvSize   = nvSize + 1;
+    nvLenght = StrLength(svDate) - nvSize;
+    StrSub(svDate, svDate, nvSize, nvLenght); // YYYY
+
+    // Year
+    g_svLogDateTime = "_"+svDate+g_svLogDateTime; // _YYYYMMDD
+    svDate = svDate+svTempo; // YYYY-MM-JJ
+  endif;
+
+  svTime = "";
+
+  if(GetSystemInfo(TIME, nvSize, svTime) < 0) then
+  else
+    g_svLogDateTime = g_svLogDateTime+"_"; // _YYYYMMDD_
+
+    // Hour
+    StrSub(svTempo, svTime, 0, 2);
+    g_svLogDateTime = g_svLogDateTime+svTempo; // _YYYYMMDD_HH
+
+    // Minute
+    StrSub(svTempo, svTime, 3, 2);
+    g_svLogDateTime = g_svLogDateTime+svTempo; // _YYYYMMDD_HHMM
+
+    // Second
+    StrSub(svTempo, svTime, 6, 2);
+    g_svLogDateTime = g_svLogDateTime+svTempo; // _YYYYMMDD_HHMMSS
+  endif;
+  
+  g_svLogPath = PROGRAMFILES^"Not\\Setup"; // LOG PATH
+  CreateDir(g_svLogPath); // MAKE SURE THE LOG FILE WILL EXIST
+
+  nvLenght = StrLength(g_svLogDateTime) - 1;
+  StrSub(svTempo, g_svLogDateTime, 1, nvLenght);
+
+  RegDBGetAppInfo("PRODUCT_VERSION", nvLenght, svVersion, nvSize);
+
+  svPackage = g_svLogPath^"Packages.log";
+  WriteProfString(svPackage, @PRODUCT_NAME+"_"+PRODUCT_GUID, "LastSetup", svTempo);
+  WriteProfString(svPackage, @PRODUCT_NAME+"_"+PRODUCT_GUID, svTempo, "START");
+  WriteProfString("", "", "", ""); // FLUSH LOG
+
+  g_svLogFile = g_svLogPath^@PRODUCT_NAME+g_svLogDateTime+".log";
+  DeleteFile(g_svLogFile); // MAKE SURE THE LOG FILE IS EMPTY FROM PREVIOUS DATA
+
+  WriteProfString(g_svLogFile, "ProductInfo", "Name", @PRODUCT_NAME);
+  WriteProfString(g_svLogFile, "ProductInfo", "Date", svDate);
+  WriteProfString(g_svLogFile, "ProductInfo", "Time", svTime);
+  WriteProfString(g_svLogFile, "ProductInfo", "Guid", PRODUCT_GUID);
+  WriteProfString(g_svLogFile, "ProductInfo", "File", g_svLogFile);
+  WriteProfString(g_svLogFile, "ProductInfo", "Vers", @NOT_SOCOOLVERSION);
+
+  WriteProfInt(g_svLogFile,    "ProductInfo", "Scrp", g_nvVerScript);
+
+  WriteProfString(g_svLogFile, "ProductInfo", "Info", "For Not internal use only...");
+
+  WriteProfString("", "", "", ""); // FLUSH LOG
+  WriteProfInt("", "", "", 0); // FLUSH LOG
+
+  LOG_ENABLE(TRUE);
+
+  g_svLogStep = "BOOTING";
+end;
+
+/////////////////////////
+// --- LOG_FLUSH() --- //
+/////////////////////////
+function LOG_FLUSH()
+begin
+  Disable(LOGGING);
+
+  WriteProfString("", "", "", ""); // FLUSH LOG
+  WriteProfInt("", "", "", 0); // FLUSH LOG
+
+  LOG_RESET();
+end;
+
+//////////////////////////
+// --- LOG_ENABLE() --- //
+//////////////////////////
+function LOG_ENABLE(bvEnable)
+begin
+  if(bvEnable == TRUE) then
+    Enable(LOGGING);
+  else
+    Disable(LOGGING);
+  endif;
+
+  g_bvLogEnable = bvEnable;
+end;
+
+/////////////////////////
+// --- LOG_RESET() --- //
+/////////////////////////
+function LOG_RESET()
+begin
+  LOG_ENABLE(g_bvLogEnable);
+end;
+
+//////////////////////////////
+// --- LOG_PKG_RESULT() --- //
+//////////////////////////////
+function LOG_PKG_RESULT(svMessage)
+  NUMBER nvLenght;
+  STRING svTempo, svPackage;
+begin
+  Disable(LOGGING);
+
+  nvLenght = StrLength(g_svLogDateTime) - 1;
+  StrSub(svTempo, g_svLogDateTime, 1, nvLenght);
+
+  svPackage = g_svLogPath^"Packages.log";
+  WriteProfString(svPackage, @PRODUCT_NAME+"_"+PRODUCT_GUID, "LastSetup", svTempo);
+  WriteProfString(svPackage, @PRODUCT_NAME+"_"+PRODUCT_GUID, svTempo, svMessage);
+  WriteProfString("", "", "", ""); // FLUSH LOG
+
+  LOG_RESET();
+end;
+
+//////////////////////////////
+// --- LOG_QUEUED_SEQ() --- //
+//////////////////////////////
+function LOG_QUEUED_SEQ(g_svLogStepper)
+begin
+  Disable(LOGGING);
+
+  AddProfString(g_svLogFile, "LogSequence", g_svLogStep, g_svLogStepper);
+  AddProfString(g_svLogFile, "LogStream", "NewSequence", g_svLogStepper);
+  WriteProfString("", "", "", ""); // FLUSH LOG
+
+  LOG_RESET();
+
+  g_svLogStep = g_svLogStepper;
+end;
+
+//////////////////////////////
+// --- LOG_PRODUCTINF() --- //
+//////////////////////////////
+function LOG_PRODUCTINF(svValueName, svValueData)
+begin
+  Disable(LOGGING);
+
+  WriteProfString(g_svLogFile, "ProductInfo", svValueName, svValueData);
+  WriteProfString("", "", "", ""); // FLUSH LOG
+
+  LOG_RESET();
+end;
+
+//////////////////////////////
+// --- LOG_ADD_STREAM() --- //
+//////////////////////////////
+function LOG_ADD_STREAM(svValueName, svValueData)
+begin
+  Disable(LOGGING);
+
+  AddProfString(g_svLogFile, "LogStream", svValueName, svValueData);
+  WriteProfString("", "", "", ""); // FLUSH LOG
+
+  LOG_RESET();
+end;
+
+//////////////////////////////
+// --- LOG_ADD_STRING() --- //
+//////////////////////////////
+function LOG_ADD_STRING(svValueName, svValueData)
+begin
+  Disable(LOGGING);
+
+  AddProfString(g_svLogFile, g_svLogStep, svValueName, svValueData);
+  WriteProfString("", "", "", ""); // FLUSH LOG
+
+  LOG_RESET();
+end;
+
+//////////////////////////////
+// --- LOG_SET_STRING() --- //
+//////////////////////////////
+function LOG_SET_STRING(svValueName, svValueData)
+begin
+  Disable(LOGGING);
+
+  WriteProfString(g_svLogFile, g_svLogStep, svValueName, svValueData);
+  WriteProfString("", "", "", ""); // FLUSH LOG
+
+  LOG_RESET();
+end;
+
+//////////////////////////////
+// --- LOG_SET_NUMBER() --- //
+//////////////////////////////
+function LOG_SET_NUMBER(svValueName, nvValueData)
+begin
+  Disable(LOGGING);
+
+  WriteProfInt(g_svLogFile, g_svLogStep, svValueName, nvValueData);
+  WriteProfInt("", "", "", 0); // FLUSH LOG
+
+  LOG_RESET();
+end;
+
+// AUTORUN                         "FALSE"
+// NOT_SOCOOL                 "SoCoolCom"
+// NOT_SOCOOLVERSION                "3.00"
+// NOT_FEAT_OUTREMER_MSG           "Choisissez les zones géographiques que vous voulez pouvoir utiliser avec "
+// NOT_FEAT_OUTREMER_TITRE         "Sélectionnez les zones géographiques à activer."
+// NOT_FEAT_SERVICES_MSG           "Choisissez les services additionnels que vous voulez installer avec "
+// NOT_FEAT_SERVICES_TITRE         "Sélectionnez les services additionnels à installer."
+// NOT_ISTXT_ADMIN_MODE_ONLY       "Execution possible seulement en mode Administrateur !"
+// NOT_ISTXT_ALAMANO               " manuellement."
+// NOT_ISTXT_ANC_INSTALL           " a-t-il déjà été installé sur cet ordinateur ?"
+// NOT_ISTXT_ANC_INSTALL_LOC       "Localisez le répertoire de l'ancienne installation de "
+// NOT_ISTXT_CHNG_RES_1            "Voulez-vous installer le réseau "
+// NOT_ISTXT_CHNG_RES_2            " à la place du réseau "
+// NOT_ISTXT_CHNG_RES_3            " actuellement installé sur votre ordinateur ?"
+// NOT_ISTXT_CLE_REG               "La clé de registre "
+// NOT_ISTXT_COPIE                 "Copie des anciens fichiers en cours ("
+// NOT_ISTXT_CREAT_KO              " n'a pas pu être créée correctement."
+// NOT_ISTXT_DATA_NT               "les données NAVTEQ "
+// NOT_ISTXT_DATA_NT_SUFFIX        ""
+// NOT_ISTXT_DESINST               "Voulez-vous désinstaller "
+// NOT_ISTXT_DESINST_KO            " ne peut être désinstallé."
+// NOT_ISTXT_DESINST_NT            ".\nVeuillez désintaller le réseau NAVTEQ "
+// NOT_ISTXT_DESINST_SUFFIX        ""
+// NOT_ISTXT_FICH_NON_DESINST_PLU  " fichiers n'ont pas été désinstallés."
+// NOT_ISTXT_FICH_NON_DESINST_SIN  " fichier n'a pas été désinstallé."
+// NOT_ISTXT_INIT_LST_KO           " ne peut initialiser les listes."
+// NOT_ISTXT_INS_CD                "Insérez le disque d'installation de "
+// NOT_ISTXT_INST                  "Voulez-vous installer "
+// NOT_ISTXT_INTROUV               " est introuvable."
+// NOT_ISTXT_LE_FICH               "Le fichier "
+// NOT_ISTXT_MAJ_LICENCE           "Attention, il vous faudra alors mettre à jour votre licence pour pouvoir utiliser ce nouveau réseau !"
+// NOT_ISTXT_MEM_ETEND             " Mo de mémoire étendue.\nIl est conseillé de disposer d'au moins 256 Mo."
+// NOT_ISTXT_MODIF_ANNULE          "Sélectionnez 'Annuler' pour terminer la modification de "
+// NOT_ISTXT_MODIF_TEXTE           "Sélectionnez le lecteur de CD/DVD ou le répertoire contenant le programme d'installation de "
+// NOT_ISTXT_MODIF_TITRE           "Chemin du programme d'installation de "
+// NOT_ISTXT_NO_RES_1              "Il n'y a aucun réseau routier d'installé, "
+// NOT_ISTXT_NO_RES_2              " ne peut donc fonctionner.\nVeuillez impérativement installer un réseau avant d'exécuter "
+// NOT_ISTXT_PAS_ASSEZ_INF         " ne dispose pas d'informations\nsuffisantes pour sa désinstallation automatique par "
+// NOT_ISTXT_PAS_NT_SUR_ORDI       "Il n'y a pas de Réseau NAVTEQ installé sur votre ordinateur."
+// NOT_ISTXT_PATIENTEZ             "Veuillez patienter..."
+// NOT_ISTXT_PAYS                  "Pays"
+// NOT_ISTXT_PRG_INST_DU           "Le programme d'installation de "
+// NOT_ISTXT_QUEST_DATA_NT         "Voulez-vous désinstaller les données NAVTEQ "
+// NOT_ISTXT_RES_NT                "Le réseau NAVTEQ "
+// NOT_ISTXT_RESEAU_DESEL          "Sélectionnez les données géographiques que vous souhaitez conserver."
+// NOT_ISTXT_RESEAU_DESINST        "Désinstallation des données géographiques."
+// NOT_ISTXT_RESEAU_INST           "Installation des zones géographiques."
+// NOT_ISTXT_RESEAU_PLUS_INST      "Installation des données géographiques complémentaires."
+// NOT_ISTXT_RESEAU_PLUS_SEL       "Sélectionnez les données géographiques complémentaires à installer."
+// NOT_ISTXT_RESEAU_SEL            "Sélectionnez les zones géographiques à installer."
+// NOT_ISTXT_RUN                   " et lancez [Lecteur]:\\"
+// NOT_ISTXT_SELECT_RES_1          "Sélection du réseau routier"
+// NOT_ISTXT_SELECT_RES_2          "Veuillez sélectionner le réseau à utiliser. Vous pourrez ensuite en choisir un autre directement depuis "
+// NOT_ISTXT_SUR_CD                "contenues sur le CD-ROM ?\n(ceci effacera les données existantes)"
+// NOT_ISTXT_VOTR_SYS              "Votre système dispose de "
