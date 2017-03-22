@@ -1,0 +1,54 @@
+///////////////////////////////
+// --- OnResumeUIBefore() --- //
+///////////////////////////////
+function OnResumeUIBefore()
+  STRING szTitle, szMsg;
+  NUMBER nvResult;
+
+  STRING svSrcOldFile, svSrcOldFileExt;
+  NUMBER nvResultOldFile;
+
+  STRING svProgram, svCmdLine, svMessage;
+  LIST listKeyHklmSoftBayoItemsID;
+begin
+  Disable(HOURGLASS);
+  Disable(STATUSEX);
+  Disable(INDVFILESTATUS);
+
+Dlg_SdResumeWelcome:
+   szTitle = SdLoadString(ISWI_RESUMEUI_TITLE);
+   szMsg   = SdLoadString(ISWI_RESUMEUI_MSG);
+
+  Disable(BACKBUTTON);
+  nvResult = SdPatchWelcome(szTitle, szMsg);
+  Enable(BACKBUTTON);
+  
+  if(nvResult == BACK) then
+    goto Dlg_SdResumeWelcome;
+  endif;
+
+  // Animation
+  SetStatusWindow(0, "");
+  Enable(STATUSEX);
+  Enable(HOURGLASS);
+  StatusUpdate(ON, 100);
+
+  // Test if executable binary file
+  nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, RESET);
+  while(nvResultOldFile == 0)
+    ParsePath(svSrcOldFileExt, svSrcOldFile, EXTENSION_ONLY);
+    if(  (svSrcOldFileExt == "scr")
+      || (svSrcOldFileExt == "com")
+      || (svSrcOldFileExt == "exe")
+      || (svSrcOldFileExt == "dll")) then
+      LOG_ADD_STREAM("File:Delete", svSrcOldFile);
+
+      // Make sure the file will be deleted
+      SetFileInfo(svSrcOldFile, FILE_ATTRIBUTE, FILE_ATTR_ARCHIVED | FILE_ATTR_NORMAL, "");
+      DeleteFile(svSrcOldFile); // Delete the unuseful file
+    else
+    endif;
+    nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CONTINUE);
+  endwhile;
+  nvResultOldFile = FindAllFiles(INSTALLDIR, "*.*", svSrcOldFile, CANCEL);
+end;
