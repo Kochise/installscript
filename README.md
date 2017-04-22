@@ -2,7 +2,7 @@
 
 InstallShield 8 script to supersede the default installer behaviors
 
-Hardware and software needed
+* Hardware and software needed
 
 You need the following to get this program working :
 
@@ -27,7 +27,7 @@ http://community.installshield.com/showthread.php?s=&threadid=130183<br>
 http://community.installshield.com/showthread.php?s=&threadid=129071<br>
 http://community.installshield.com/showthread.php?s=&threadid=123240<br>
 
-(full list here : http://discuss.fogcreek.com/joelonsoftware/?cmd=show&ixPost=39127)
+(full list here : http://discuss.fogcreek.com/joelonsoftware/?cmd=show&ixPost=39127 )
 
 * How to use it
 
